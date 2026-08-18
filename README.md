@@ -46,11 +46,16 @@ cwv-playbook-miner generate
 ```
 
 `extract` evaluates eight compact PR records per LLM call by default. It combines
-page-performance rejection, structured extraction, and assignment to a controlled
-broad technique family. Results are cached by PR content, prompt version, backend,
-and model, so unchanged records do not consume another call.
+page-performance rejection, structured extraction, assignment to one of 15 stable
+parent strategies, and a reusable sub-strategy proposal. Results are cached by PR
+content, prompt version, backend, and model, so unchanged records do not consume
+another call.
 
 `cluster` is a statistical aggregation stage rather than one-output-per-PR.
-Family-normalized observations merge locally; legacy observations without a family
-can still use the alias matcher. The default evidence gate requires 3 observations
-across 2 repositories with at least 70% directional consistency.
+Exact sub-strategy aliases merge locally. Ambiguous sibling names are resolved in
+batches and only within the same parent. A one-off child remains provisional; it is
+promoted after repetition across repositories. Candidates live at parent-strategy
+level and include their child variants. A parent requires at least one active child,
+3 total observations across 2 repositories, and 70% directional consistency.
+Techniques outside all 15 parents enter `taxonomy_proposals.jsonl` for human review;
+they never expand the parent taxonomy automatically.

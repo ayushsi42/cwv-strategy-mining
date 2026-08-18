@@ -14,14 +14,20 @@ source + label -> extract -> cluster -> classify -> match regressions -> generat
    fetch diffs only for labeled merged PRs. A larger external corpus supplies
    additional real improvement PRs when live-window yield is sparse.
 2. **Extract:** one fused response rejects non-page-performance correlations and
-   derives the specific technique, broad controlled family, mechanism, resource,
-   render phase, symptom, code pattern, explanation, framework, and audit signal.
+   derives the specific technique, one of 15 stable parent strategies, a proposed
+   reusable sub-strategy, mechanism, resource, render phase, symptom, code pattern,
+   explanation, framework, and audit signal.
    Up to eight compact PRs share one request. Per-record content-hash caching makes
    reruns independent of batch boundaries and avoids repeat calls.
-3. **Aggregate:** merge observations locally by their controlled broad family,
-   retaining specific changes as aliases and examples. Legacy observations without
-   a family continue through deterministic exact/high-similarity matching, with an
-   LLM judge only for borderline legacy pairs.
+3. **Resolve and aggregate:** exact child aliases merge locally. Ambiguous proposed
+   children are shortlisted only among siblings of the same parent and resolved in
+   bounded LLM batches. Specific PR changes remain aliases/examples. One observation
+   creates a provisional child; repetition across two repositories promotes it to an
+   active child. Parent strategies are the evolving candidate documents; children
+   are their evidence-backed variants. A parent advances only with an active child,
+   at least three total observations, two repositories, and 70% consistency.
+   Valid techniques outside all fixed parents are written to a proposal pool. Even a
+   repeated proposal requires human review before the stable parent set changes.
    The registry stores observation/repository counts, direction consistency,
    per-metric effect distributions, aliases, and bounded representative PRs.
    A technique advances only with at least three observations, two independent
@@ -59,8 +65,8 @@ Required sections are `What this addresses`, `Evidence`, `Recommended approach`,
 
 ## Current limitations
 
-- Legacy records without a controlled family can require an LLM equivalence
-  judgment; newly fused extraction records never require pairwise LLM merging.
+- Ambiguous sibling resolution still depends on an LLM, but requests are batched,
+  parent-scoped, cached at extraction, and never allowed to invent a parent.
 - Bot templates without a verified live example never claim a measured signal.
 - Front-end and CI/docs filtering uses filename heuristics.
 - Generation validation checks structure and provenance fields; factual review

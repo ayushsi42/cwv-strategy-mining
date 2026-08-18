@@ -17,42 +17,11 @@ from pathlib import Path
 
 from cwv_playbook_miner.extraction.pr_record import PRRecord
 from cwv_playbook_miner.llm.client import complete_json
+from cwv_playbook_miner.taxonomy import PARENT_STRATEGIES, parent_taxonomy_prompt
 
 
-PROMPT_VERSION = "fused-extraction-v2"
-BROAD_TECHNIQUE_FAMILIES = {
-    "reduce-shipped-javascript": "Reduce shipped JavaScript",
-    "defer-non-critical-work": "Defer non-critical work",
-    "optimize-critical-images": "Optimize critical images",
-    "eliminate-redundant-computation": "Eliminate redundant computation",
-    "reuse-cache-and-data": "Reuse cached data and requests",
-    "stabilize-layout": "Stabilize layout",
-    "optimize-css-delivery": "Optimize CSS delivery",
-    "optimize-font-delivery": "Optimize font delivery",
-    "reduce-network-payload": "Reduce network payload",
-    "reduce-server-response-time": "Reduce server response time",
-    "reduce-third-party-cost": "Reduce third-party cost",
-    "optimize-interaction-work": "Optimize interaction work",
-}
+PROMPT_VERSION = "hierarchical-extraction-v1"
 
-FAMILY_REQUIRED_TERMS = {
-    "reduce-shipped-javascript": ("javascript", "bundle", "chunk", "code split", "lazy route", "unused js"),
-    "defer-non-critical-work": ("defer", "lazy", "delay", "postpone", "on demand", "below fold"),
-    "optimize-critical-images": ("image", "hero", "lcp"),
-    "eliminate-redundant-computation": ("duplicate", "redundant", "compute", "parse", "regex", "loop", "memo"),
-    "reuse-cache-and-data": ("cache", "persisted", "reuse", "already", "duplicate roundtrip", "skip an extra"),
-    "stabilize-layout": ("layout", "cls", "shift", "skeleton", "reserve", "fouc", "theme flash"),
-    "optimize-css-delivery": ("css", "stylesheet", "style"),
-    "optimize-font-delivery": ("font", "woff", "typeface"),
-    "reduce-network-payload": ("payload", "transfer", "bytes", "response size", "download"),
-    "reduce-server-response-time": ("ttfb", "server response", "origin latency", "backend latency"),
-    "reduce-third-party-cost": ("third party", "third-party", "vendor script", "tracking script"),
-    "optimize-interaction-work": ("interaction", "inp", "event handler", "input delay", "main thread"),
-}
-
-_FAMILY_LINES = "\n".join(
-    f'- "{key}": {label}' for key, label in BROAD_TECHNIQUE_FAMILIES.items()
-)
 SYSTEM_PROMPT = f"""You are a strict web-performance evidence extractor. Evaluate every supplied
 GitHub PR independently. Return one result carrying the same source_id for every input.
 
@@ -61,8 +30,13 @@ renders or executes, or directly reduce origin response latency. Reject accessib
 visual/UX, correctness, security, test, CI, build-speed, social-preview, metadata and generic
 dependency-upgrade changes even when a coincident Lighthouse score changed.
 
-For valid observations, select exactly one broad_family from this controlled taxonomy:
-{_FAMILY_LINES}
+For valid observations, select exactly one parent_strategy from this stable taxonomy:
+{parent_taxonomy_prompt()}
+
+Also propose a reusable sub_strategy. It must describe the concrete mechanism at a level
+that can recur across repositories: for example "route-level code splitting", "reserve
+space for async content", or "reuse request-scoped authenticated user data". It must not
+contain a repository, product, component, route, or framework-specific name.
 
 The specific change must implement the named family mechanism, not merely accompany it.
 For example: hiding columns is not reduced shipped JavaScript; metadata deduplication and
@@ -76,7 +50,9 @@ Return strict JSON:
   "source_id": "exact input id",
   "is_page_performance": true,
   "rejection_reason": "empty when accepted; concise reason when rejected",
-  "broad_family": "one taxonomy key or null",
+  "parent_strategy": "one stable taxonomy key or null",
+  "sub_strategy": "short reusable mechanism or null",
+  "proposed_parent_strategy": "short proposal only when none of the 15 parents fits; otherwise null",
   "technique": "short specific reusable variant or null",
   "problem_symptom": "audit/page symptom",
   "code_pattern": "generalized change",
@@ -88,8 +64,10 @@ Return strict JSON:
   "render_phase": "initial-load | interaction | server-response | background"
 }}]}}
 
-Do not infer performance from score correlation alone. A rejected item must use false, null
-broad_family, and null technique. Do not omit input records."""
+Do not infer performance from score correlation alone. A rejected item must use false and
+null parent_strategy, sub_strategy, and technique. If a valid technique genuinely fits none
+of the 15 parents, set parent_strategy null and proposed_parent_strategy; it will enter a
+provisional review pool rather than automatically expanding the taxonomy. Do not omit inputs."""
 
 
 def _compact_record(record: PRRecord) -> dict:
@@ -151,30 +129,27 @@ class ExtractedPattern:
     mechanism: str = ""
     affected_resource: str = ""
     render_phase: str = ""
-    broad_family: str = ""
+    parent_strategy: str = ""
+    sub_strategy: str = ""
+    sub_strategy_aliases: list[str] = field(default_factory=list)
+    proposed_parent_strategy: str = ""
+    broad_family: str = ""  # legacy field; ignored by hierarchical aggregation
 
 
 def _to_pattern(record: PRRecord, extracted: dict) -> ExtractedPattern | None:
     technique = extracted.get("technique")
-    family = extracted.get("broad_family")
-    evidence_text = " ".join(str(extracted.get(key, "") or "") for key in (
-        "technique", "problem_symptom", "code_pattern", "why_it_works", "mechanism",
-        "affected_resource", "applicable_signal",
-    )).lower().replace("-", " ")
-    coherent_family = family in FAMILY_REQUIRED_TERMS and any(
-        term in evidence_text for term in FAMILY_REQUIRED_TERMS.get(family, ())
-    )
-    if family == "reuse-cache-and-data" and (
-        "fallback request" in evidence_text or "second request" in evidence_text
-    ):
-        coherent_family = False
+    parent = extracted.get("parent_strategy")
+    sub_strategy = extracted.get("sub_strategy")
+    proposed_parent = extracted.get("proposed_parent_strategy") or ""
+    valid_parent = parent in PARENT_STRATEGIES
     if (
         extracted.get("is_page_performance") is not True
         or not isinstance(technique, str)
         or not technique.strip()
         or technique.strip().lower() in {"null", "none", "n/a"}
-        or family not in BROAD_TECHNIQUE_FAMILIES
-        or not coherent_family
+        or (not valid_parent and not proposed_parent.strip())
+        or not isinstance(sub_strategy, str)
+        or not sub_strategy.strip()
     ):
         return None
     return ExtractedPattern(
@@ -182,7 +157,9 @@ def _to_pattern(record: PRRecord, extracted: dict) -> ExtractedPattern | None:
         source_repo=record.repo,
         signal_type=record.signal_type,
         technique=technique.strip(),
-        broad_family=family,
+        parent_strategy=parent if valid_parent else "unclassified",
+        sub_strategy=sub_strategy.strip(),
+        proposed_parent_strategy=proposed_parent,
         problem_symptom=extracted.get("problem_symptom", ""),
         code_pattern=extracted.get("code_pattern", ""),
         why_it_works=extracted.get("why_it_works", ""),
@@ -232,8 +209,6 @@ def extract_patterns(
     cache_dir = cache_dir or Path("data/processed/llm_cache/extraction")
     extracted_by_id: dict[str, dict] = {}
     misses: list[PRRecord] = []
-    record_by_id = {record.id: record for record in records}
-
     for record in records:
         cached = _read_cache(cache_dir / f"{_cache_key(record, backend, model)}.json")
         if cached is None:
@@ -268,7 +243,7 @@ def extract_patterns(
         pattern = _to_pattern(record, item) if item else None
         if pattern:
             patterns.append(pattern)
-        print(f"  {record.id}: {'ok -> ' + pattern.broad_family + ' / ' + pattern.technique if pattern else 'rejected'}")
+        print(f"  {record.id}: {'ok -> ' + pattern.parent_strategy + ' / ' + pattern.sub_strategy if pattern else 'rejected'}")
     return patterns
 
 
@@ -285,5 +260,9 @@ def read_jsonl(path: Path) -> list[ExtractedPattern]:
         for line in handle:
             payload = json.loads(line)
             payload.setdefault("broad_family", "")
+            payload.setdefault("parent_strategy", "")
+            payload.setdefault("sub_strategy", payload.get("technique", ""))
+            payload.setdefault("sub_strategy_aliases", [])
+            payload.setdefault("proposed_parent_strategy", "")
             patterns.append(ExtractedPattern(**payload))
     return patterns

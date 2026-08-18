@@ -48,6 +48,7 @@ class TechniqueCluster:
     directional_consistency: float = 0.0
     confidence: str = "provisional"
     aliases: list[str] = field(default_factory=list)
+    parent_strategy: str = ""
 
 
 def cluster_patterns(patterns: list[ExtractedPattern]) -> list[TechniqueCluster]:
@@ -111,6 +112,7 @@ def merge_clusters(clusters: list[TechniqueCluster]) -> TechniqueCluster:
             default="provisional",
         ),
         aliases=sorted({alias for c in clusters for alias in c.aliases}),
+        parent_strategy=clusters[0].parent_strategy,
     )
 
 

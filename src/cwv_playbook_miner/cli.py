@@ -18,15 +18,16 @@ from cwv_playbook_miner.classification.classify_cluster import Classification, c
 from cwv_playbook_miner.classification import classify_cluster as classify_mod
 from cwv_playbook_miner.aggregation.statistical import (
     aggregate_patterns,
-    make_llm_judge,
     read_aggregates,
-    to_technique_cluster,
+    resolve_substrategy_matches,
+    to_parent_strategy_clusters,
     write_aggregates,
 )
 from cwv_playbook_miner.extraction import cluster as cluster_mod
 from cwv_playbook_miner.extraction import pattern_extract
 from cwv_playbook_miner.extraction.external_corpus import load_golden_perf_improvement
 from cwv_playbook_miner.extraction.pr_record import PRRecord, read_jsonl as read_pr_jsonl, write_jsonl as write_pr_jsonl
+from cwv_playbook_miner.taxonomy import write_parent_proposals
 from cwv_playbook_miner.generation.render_candidate import render_candidate, validate_candidate_text, write_candidate
 from cwv_playbook_miner.llm.client import resolve_default_backend
 from cwv_playbook_miner.sourcing.gharchive_fetch import read_cursor, write_cursor
@@ -239,12 +240,14 @@ def cmd_cluster(args: argparse.Namespace) -> None:
     patterns = improvement_patterns + decrease_patterns
     aggregate_path = DATA_PROCESSED / "technique_aggregates.jsonl"
     prior = read_aggregates(aggregate_path)
-    judge = None
     if not args.no_llm_merge:
         backend = args.backend or resolve_default_backend()
-        judge = make_llm_judge(backend, args.model, args.timeout)
+        resolve_substrategy_matches(patterns, prior, backend, args.model, args.timeout)
+    proposal_count = write_parent_proposals(
+        patterns, DATA_PROCESSED / "taxonomy_proposals.jsonl",
+    )
     aggregates = aggregate_patterns(
-        patterns, prior=prior, judge=judge,
+        patterns, prior=prior,
         auto_merge_threshold=args.auto_merge_threshold,
         borderline_threshold=args.borderline_threshold,
         min_observations=args.min_observations,
@@ -252,12 +255,17 @@ def cmd_cluster(args: argparse.Namespace) -> None:
         min_consistency=args.min_consistency,
     )
     write_aggregates(aggregates, aggregate_path)
-    clusters = [cluster for item in aggregates if (cluster := to_technique_cluster(item))]
+    clusters = to_parent_strategy_clusters(
+        aggregates,
+        min_observations=args.min_observations,
+        min_repos=args.min_repos,
+        min_consistency=args.min_consistency,
+    )
     out_path = DATA_PROCESSED / "clusters.jsonl"
     cluster_mod.write_jsonl(clusters, out_path)
     print(
         f"Aggregated {len(patterns)} patterns into {len(aggregates)} canonical technique(s); "
-        f"{len(clusters)} meet evidence thresholds -> {out_path}"
+        f"{len(clusters)} meet evidence thresholds; {proposal_count} parent proposal(s) await review -> {out_path}"
     )
     for c in clusters:
         print(

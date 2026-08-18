@@ -33,7 +33,8 @@ Use "candidate" when the evidence supports useful generic CWV guidance. Use "dro
 
 def build_prompt(cluster: TechniqueCluster) -> str:
     return f"""Canonical technique ID (already assigned; do not rename): {cluster.normalized_key}
-Technique: {cluster.technique}
+Parent strategy: {cluster.parent_strategy}
+Sub-strategy: {cluster.technique}
 Measured in {cluster.frequency} real PR(s): {', '.join(cluster.source_pr_ids)}
 Independent repositories: {cluster.distinct_repo_count}
 Evidence direction: {cluster.positive_count} improvements / {cluster.negative_count} regressions

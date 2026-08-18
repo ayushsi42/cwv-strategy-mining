@@ -1,5 +1,14 @@
-from cwv_playbook_miner.aggregation.statistical import aggregate_patterns, to_technique_cluster
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from cwv_playbook_miner.aggregation.statistical import (
+    aggregate_patterns, resolve_substrategy_matches, to_parent_strategy_clusters,
+    to_technique_cluster,
+)
 from cwv_playbook_miner.extraction.pattern_extract import ExtractedPattern
+from cwv_playbook_miner.taxonomy import write_parent_proposals
 
 
 def _pattern(
@@ -12,6 +21,8 @@ def _pattern(
     affected_resource: str = "",
     render_phase: str = "",
     broad_family: str = "",
+    parent_strategy: str = "layout-stability",
+    sub_strategy: str | None = None,
 ) -> ExtractedPattern:
     return ExtractedPattern(
         source_id=source,
@@ -28,6 +39,8 @@ def _pattern(
         affected_resource=affected_resource,
         render_phase=render_phase,
         broad_family=broad_family,
+        parent_strategy=parent_strategy,
+        sub_strategy=sub_strategy or technique,
     )
 
 
@@ -175,11 +188,11 @@ def test_literal_null_techniques_are_not_aggregated() -> None:
     assert aggregate_patterns([_pattern("one/repo#1", "null")]) == []
 
 
-def test_controlled_family_merges_different_specific_techniques_without_judge() -> None:
+def test_parent_and_shared_sub_strategy_merge_specific_variants_without_judge() -> None:
     patterns = [
-        _pattern("one/repo#1", "deep import one icon", broad_family="reduce-shipped-javascript"),
-        _pattern("two/repo#2", "exclude tests from bundle", broad_family="reduce-shipped-javascript"),
-        _pattern("three/repo#3", "remove unreachable frontend code", broad_family="reduce-shipped-javascript"),
+        _pattern("one/repo#1", "deep import one icon", parent_strategy="javascript-delivery", sub_strategy="remove unused javascript"),
+        _pattern("two/repo#2", "exclude tests from bundle", parent_strategy="javascript-delivery", sub_strategy="remove unused javascript"),
+        _pattern("three/repo#3", "remove unreachable frontend code", parent_strategy="javascript-delivery", sub_strategy="remove unused javascript"),
     ]
 
     def unexpected_judge(*_args):
@@ -188,7 +201,111 @@ def test_controlled_family_merges_different_specific_techniques_without_judge() 
     aggregates = aggregate_patterns(patterns, judge=unexpected_judge)
 
     assert len(aggregates) == 1
-    assert aggregates[0].canonical_id == "reduce-shipped-javascript"
+    assert aggregates[0].canonical_id == "javascript-delivery--remove-unused-javascript"
+    assert aggregates[0].parent_strategy == "javascript-delivery"
     assert aggregates[0].observation_count == 3
     assert aggregates[0].distinct_repo_count == 3
     assert aggregates[0].eligible
+
+
+def test_single_observation_stays_provisional() -> None:
+    item = aggregate_patterns([
+        _pattern("one/repo#1", "reserve async panel space", sub_strategy="reserve space for async content"),
+    ], min_observations=1, min_repos=1)[0]
+
+    assert item.status == "provisional"
+    assert not item.eligible
+
+
+def test_identical_sub_strategy_names_under_different_parents_never_merge() -> None:
+    patterns = [
+        _pattern("one/repo#1", "defer work", parent_strategy="javascript-delivery", sub_strategy="defer optional work"),
+        _pattern("two/repo#2", "defer work", parent_strategy="third-party-cost", sub_strategy="defer optional work"),
+    ]
+    assert len(aggregate_patterns(patterns, min_observations=1, min_repos=1)) == 2
+
+
+def test_ambiguous_sub_strategy_resolution_is_batched_within_parent() -> None:
+    patterns = [
+        _pattern(
+            "one/repo#1", "delay invisible media", parent_strategy="image-delivery",
+            sub_strategy="defer offscreen images", mechanism="defer",
+            affected_resource="offscreen images", render_phase="initial-load",
+        ),
+        _pattern(
+            "two/repo#2", "lazy pictures beneath viewport", parent_strategy="image-delivery",
+            sub_strategy="lazy load below fold pictures", mechanism="defer",
+            affected_resource="offscreen images", render_phase="initial-load",
+        ),
+    ]
+
+    def resolve(_system, user, **_kwargs):
+        requests = json.loads(user)
+        results = []
+        for request in requests:
+            match = next(
+                (candidate for candidate in request["candidates"] if candidate["name"] == "defer offscreen images"),
+                None,
+            )
+            results.append({
+                "source_id": request["source_id"],
+                "canonical_id": match["canonical_id"] if match else None,
+            })
+        return {"results": results}
+
+    with patch("cwv_playbook_miner.aggregation.statistical.complete_json", side_effect=resolve) as completion:
+        resolve_substrategy_matches(patterns, [], "openai", "test", 30)
+
+    assert completion.call_count == 1
+    initial = aggregate_patterns(patterns, min_observations=1, min_repos=1)
+    assert len(initial) == 1
+    raw_alias = _pattern(
+        "three/repo#3", "pictures under viewport", parent_strategy="image-delivery",
+        sub_strategy="lazy load below fold pictures", mechanism="defer",
+        affected_resource="offscreen images", render_phase="initial-load",
+    )
+    rebuilt = aggregate_patterns([raw_alias], prior=initial, min_observations=1, min_repos=1)
+    assert len(rebuilt) == 1
+    assert rebuilt[0].canonical_id == initial[0].canonical_id
+
+
+def test_unknown_parent_proposals_require_review_and_repetition() -> None:
+    patterns = [
+        _pattern("one/repo#1", "stream edge output", parent_strategy="unclassified", sub_strategy="stream edge output"),
+        _pattern("two/repo#2", "stream edge output", parent_strategy="unclassified", sub_strategy="stream edge output"),
+        _pattern("three/repo#3", "stream edge output", parent_strategy="unclassified", sub_strategy="stream edge output"),
+    ]
+    for pattern in patterns:
+        pattern.proposed_parent_strategy = "edge delivery architecture"
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "proposals.jsonl"
+        assert write_parent_proposals(patterns, path) == 1
+        proposal = json.loads(path.read_text())
+
+    assert proposal["promotion_ready"] is True
+    assert proposal["status"] == "human-review"
+    assert aggregate_patterns(patterns) == []
+
+
+def test_parent_candidate_combines_children_but_requires_an_active_child() -> None:
+    patterns = [
+        _pattern("one/repo#1", "remove dependency", parent_strategy="network-payload", sub_strategy="remove unused shipped code"),
+        _pattern("two/repo#2", "prune dead code", parent_strategy="network-payload", sub_strategy="remove unused shipped code"),
+        _pattern("three/repo#3", "exclude source maps", parent_strategy="network-payload", sub_strategy="exclude non-runtime assets"),
+    ]
+    aggregates = aggregate_patterns(patterns)
+    clusters = to_parent_strategy_clusters(aggregates)
+
+    assert len(clusters) == 1
+    assert clusters[0].normalized_key == "network-payload"
+    assert clusters[0].frequency == 3
+    assert set(clusters[0].aliases) == {"remove unused shipped code", "exclude non-runtime assets"}
+
+
+def test_parent_singletons_cannot_manufacture_candidate() -> None:
+    patterns = [
+        _pattern("one/repo#1", "one", parent_strategy="network-payload", sub_strategy="remove unused code"),
+        _pattern("two/repo#2", "two", parent_strategy="network-payload", sub_strategy="compress json"),
+        _pattern("three/repo#3", "three", parent_strategy="network-payload", sub_strategy="strip source maps"),
+    ]
+    assert to_parent_strategy_clusters(aggregate_patterns(patterns)) == []

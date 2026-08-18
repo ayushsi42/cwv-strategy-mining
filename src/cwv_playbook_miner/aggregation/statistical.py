@@ -19,7 +19,8 @@ from statistics import median
 from typing import Callable
 
 from cwv_playbook_miner.extraction.cluster import TechniqueCluster, normalize_technique
-from cwv_playbook_miner.extraction.pattern_extract import BROAD_TECHNIQUE_FAMILIES, ExtractedPattern
+from cwv_playbook_miner.extraction.pattern_extract import ExtractedPattern
+from cwv_playbook_miner.taxonomy import PARENT_STRATEGIES
 from cwv_playbook_miner.llm.client import LLMError, complete_json
 
 
@@ -45,7 +46,7 @@ def _match_text(item: ExtractedPattern | dict) -> str:
     get = (lambda key: getattr(item, key, "")) if isinstance(item, ExtractedPattern) else (lambda key: item.get(key, ""))
     return " ".join(
         str(get(key) or "")
-        for key in ("technique", "mechanism", "affected_resource", "render_phase", "applicable_signal")
+        for key in ("sub_strategy", "technique", "mechanism", "affected_resource", "render_phase", "applicable_signal")
     )
 
 
@@ -86,6 +87,8 @@ def _bounded_by_source(items: list[dict], limit: int) -> list[dict]:
 class TechniqueAggregate:
     canonical_id: str
     canonical_name: str
+    parent_strategy: str = ""
+    status: str = "provisional"
     aliases: list[str] = field(default_factory=list)
     signature_aliases: list[str] = field(default_factory=list)
     observation_count: int = 0
@@ -131,7 +134,13 @@ class TechniqueAggregate:
         self.directional_consistency = round(
             self.positive_count / directional, 4,
         ) if directional else 0.0
+        self.status = (
+            "active" if self.observation_count >= 2 and self.distinct_repo_count >= 2
+            else "provisional"
+        )
         self.eligible = (
+            self.status == "active"
+            and
             self.observation_count >= min_observations
             and self.distinct_repo_count >= min_repos
             and self.positive_count > 0
@@ -154,6 +163,8 @@ def _representative(pattern: ExtractedPattern) -> dict:
         "source_id": pattern.source_id,
         "source_repo": pattern.source_repo,
         "technique": pattern.technique,
+        "parent_strategy": pattern.parent_strategy,
+        "sub_strategy": pattern.sub_strategy,
         "problem_symptom": pattern.problem_symptom,
         "code_pattern": pattern.code_pattern,
         "why_it_works": pattern.why_it_works,
@@ -207,6 +218,124 @@ def _add_observation(aggregate: TechniqueAggregate, pattern: ExtractedPattern) -
 BorderlineJudge = Callable[[ExtractedPattern, TechniqueAggregate], bool]
 
 
+def resolve_substrategy_matches(
+    patterns: list[ExtractedPattern], prior: list[TechniqueAggregate],
+    backend: str, model: str | None, timeout: int, batch_size: int = 12,
+) -> int:
+    """Batch ambiguous sub-strategy aliases within their assigned parent.
+
+    The resolver never changes a parent and never creates one. It only maps a
+    proposed sub-strategy onto one of a small set of existing/current sibling
+    names. Returning null leaves the observation as a provisional new child.
+    """
+    known_by_parent: dict[str, dict[str, dict]] = {}
+    for item in prior:
+        if item.parent_strategy in PARENT_STRATEGIES:
+            bucket = known_by_parent.setdefault(item.parent_strategy, {})
+            bucket[item.canonical_name] = {
+                "canonical_id": item.canonical_id,
+                "texts": _aggregate_match_texts(item),
+                "status": item.status,
+            }
+            for alias in item.aliases:
+                bucket.setdefault(alias, {
+                    "canonical_id": item.canonical_id,
+                    "texts": _aggregate_match_texts(item),
+                    "status": item.status,
+                })
+    for pattern in patterns:
+        if pattern.parent_strategy in PARENT_STRATEGIES:
+            known_by_parent.setdefault(pattern.parent_strategy, {}).setdefault(pattern.sub_strategy, {
+                "canonical_id": f"proposal:{normalize_technique(pattern.sub_strategy)}",
+                "texts": [_match_text(pattern)],
+                "status": "current",
+            })
+
+    unresolved = []
+    for pattern in patterns:
+        parent = pattern.parent_strategy
+        proposed = normalize_technique(pattern.sub_strategy)
+        siblings = known_by_parent.get(parent, {})
+        exact = [
+            (name, sibling) for name, sibling in siblings.items()
+            if normalize_technique(name) == proposed
+        ]
+        active_exact = [item for item in exact if item[1]["status"] == "active"]
+        if active_exact:
+            pattern.sub_strategy_aliases = sorted(set([
+                *pattern.sub_strategy_aliases, pattern.sub_strategy,
+            ]))
+            pattern.sub_strategy = active_exact[0][0]
+            continue
+        prior_self_ids = {
+            sibling["canonical_id"] for _name, sibling in exact
+            if sibling["status"] == "provisional"
+        }
+        candidates = []
+        pattern_text = _match_text(pattern)
+        for name, sibling in siblings.items():
+            if normalize_technique(name) == proposed:
+                continue
+            if sibling["canonical_id"] in prior_self_ids:
+                continue
+            score = max(lexical_similarity(pattern_text, text) for text in sibling["texts"])
+            if score >= 0.12:
+                candidates.append({
+                    "name": name, "canonical_id": sibling["canonical_id"], "score": round(score, 3),
+                })
+        best_by_id = {}
+        for candidate in candidates:
+            current = best_by_id.get(candidate["canonical_id"])
+            if current is None or candidate["score"] > current["score"]:
+                best_by_id[candidate["canonical_id"]] = candidate
+        candidates = list(best_by_id.values())
+        candidates.sort(key=lambda item: (-item["score"], item["name"]))
+        if candidates:
+            unresolved.append({
+                "pattern": pattern,
+                "payload": {
+                    "source_id": pattern.source_id,
+                    "parent_strategy": parent,
+                    "proposed_sub_strategy": pattern.sub_strategy,
+                    "mechanism": pattern.mechanism,
+                    "affected_resource": pattern.affected_resource,
+                    "render_phase": pattern.render_phase,
+                    "why_it_works": pattern.why_it_works,
+                    "candidates": candidates[:5],
+                },
+            })
+
+    system = """Resolve reusable web-performance sub-strategy aliases at guidance level. Each item already has a fixed parent strategy. Match differently worded implementation variants when an engineer would reasonably place them in one reusable recommendation, even if the exact component/resource differs. Examples: removing an unused runtime dependency and eliminating unused shipped code are one child; middleware user reuse and request-scoped authenticated data reuse are one child; skeleton reservation and avoiding a collapsing fallback are one layout-stability child. Do not match merely because outcomes are related, and never change the parent. Return strict JSON: {"results":[{"source_id":"...","canonical_id":"one supplied candidate id or null"}]}."""
+    resolved = 0
+    for start in range(0, len(unresolved), batch_size):
+        batch = unresolved[start:start + batch_size]
+        try:
+            response = complete_json(
+                system, json.dumps([item["payload"] for item in batch]),
+                backend=backend, model=model, timeout=timeout,
+            )
+        except LLMError as exc:
+            print(f"    sub-strategy resolver batch failed: {exc}; leaving proposals separate")
+            continue
+        decisions = {
+            item.get("source_id"): item.get("canonical_id")
+            for item in response.get("results", []) if isinstance(item, dict)
+        }
+        for item in batch:
+            pattern = item["pattern"]
+            decision = decisions.get(pattern.source_id)
+            allowed = {candidate["canonical_id"]: candidate["name"] for candidate in item["payload"]["candidates"]}
+            if decision in allowed:
+                pattern.sub_strategy_aliases = sorted(set([
+                    *pattern.sub_strategy_aliases, pattern.sub_strategy,
+                ]))
+                pattern.sub_strategy = allowed[decision]
+                resolved += 1
+    if unresolved:
+        print(f"  sub-strategy resolver: {len(unresolved)} ambiguous observation(s), {resolved} alias match(es), {math.ceil(len(unresolved) / batch_size)} LLM batch(es)")
+    return resolved
+
+
 def make_llm_judge(backend: str, model: str | None, timeout: int) -> BorderlineJudge:
     system = """Decide whether two web-performance technique descriptions represent the same reusable mechanism. Names may differ. They are the same only when mechanism, affected resource/work, render phase, and trigger signal are compatible. Related outcomes alone are insufficient. Return strict JSON: {"same_technique": true|false, "reason": "one sentence"}."""
 
@@ -251,19 +380,21 @@ def aggregate_patterns(
         TechniqueAggregate(
             canonical_id=item.canonical_id,
             canonical_name=item.canonical_name,
+            parent_strategy=item.parent_strategy,
+            status=item.status,
             aliases=sorted(set(item.aliases + [normalize_technique(item.canonical_name)])),
             signature_aliases=item.signature_aliases,
         )
-        for item in prior
+        for item in prior if item.parent_strategy in PARENT_STRATEGIES
     ]
-    alias_lookup: dict[str, int] = {}
-    token_index: dict[str, set[int]] = {}
+    alias_lookup: dict[tuple[str, str], int] = {}
+    token_index: dict[tuple[str, str], set[int]] = {}
     for index, item in enumerate(aggregates):
         for alias in item.aliases:
-            alias_lookup[alias] = index
+            alias_lookup[(item.parent_strategy, alias)] = index
         for match_text in _aggregate_match_texts(item):
             for token in _tokens(match_text):
-                token_index.setdefault(token, set()).add(index)
+                token_index.setdefault((item.parent_strategy, token), set()).add(index)
     seen_sources = set()
     for pattern in sorted(patterns, key=lambda item: item.source_id):
         if pattern.technique.strip().lower() in {"null", "none", "n/a"}:
@@ -271,31 +402,21 @@ def aggregate_patterns(
         if pattern.source_id in seen_sources:
             continue
         seen_sources.add(pattern.source_id)
-        normalized = normalize_technique(pattern.technique)
+        if pattern.parent_strategy not in PARENT_STRATEGIES:
+            continue
+        normalized = normalize_technique(pattern.sub_strategy or pattern.technique)
+        technique_alias = normalize_technique(pattern.technique)
+        proposed_aliases = {
+            normalize_technique(alias) for alias in pattern.sub_strategy_aliases if alias.strip()
+        }
         pattern_match_text = _match_text(pattern)
-
-        # Fused extraction assigns a controlled broad mechanism family. That
-        # assignment is the semantic normalization decision, so merge it
-        # locally and retain the PR-specific technique only as an alias. This
-        # avoids one LLM equivalence call per observation.
-        family = pattern.broad_family if pattern.broad_family in BROAD_TECHNIQUE_FAMILIES else ""
-        target_index = next(
-            (index for index, item in enumerate(aggregates) if item.canonical_id == family),
-            None,
-        ) if family else alias_lookup.get(normalized)
+        parent = pattern.parent_strategy
+        target_index = alias_lookup.get((parent, normalized))
         target = aggregates[target_index] if target_index is not None else None
         candidate_indexes = set().union(
-            *(token_index.get(token, set()) for token in _tokens(pattern_match_text))
+            *(token_index.get((parent, token), set()) for token in _tokens(pattern_match_text))
         ) if _tokens(pattern_match_text) else set()
-        if target is None and family:
-            target = TechniqueAggregate(
-                canonical_id=family,
-                canonical_name=BROAD_TECHNIQUE_FAMILIES[family],
-                aliases=[],
-            )
-            aggregates.append(target)
-            target_index = len(aggregates) - 1
-        elif target is None and candidate_indexes:
+        if target is None and candidate_indexes:
             scored = [
                 (
                     max(
@@ -316,28 +437,30 @@ def aggregate_patterns(
                 target_index = best_index
 
         if target is None:
-            canonical_id = _slug(pattern.technique)
+            canonical_id = f"{parent}--{_slug(pattern.sub_strategy or pattern.technique)}"
             used = {item.canonical_id for item in aggregates}
             if canonical_id in used:
-                suffix = hashlib.sha1(normalized.encode()).hexdigest()[:8]
+                suffix = hashlib.sha1(f"{parent}:{normalized}".encode()).hexdigest()[:8]
                 canonical_id = f"{canonical_id}-{suffix}"
             target = TechniqueAggregate(
                 canonical_id=canonical_id,
-                canonical_name=pattern.technique.strip(),
-                aliases=[normalized],
+                canonical_name=(pattern.sub_strategy or pattern.technique).strip(),
+                parent_strategy=parent,
+                aliases=sorted({normalized, technique_alias, *proposed_aliases}),
             )
             aggregates.append(target)
             target_index = len(aggregates) - 1
-        elif normalized not in target.aliases:
-            target.aliases.append(normalized)
+        else:
+            target.aliases.extend([normalized, technique_alias, *proposed_aliases])
 
-        alias_lookup[normalized] = target_index
-        for token in _tokens(normalized):
-            token_index.setdefault(token, set()).add(target_index)
+        for alias in (normalized, technique_alias, *proposed_aliases):
+            alias_lookup[(parent, alias)] = target_index
+            for token in _tokens(alias):
+                token_index.setdefault((parent, token), set()).add(target_index)
 
         _add_observation(target, pattern)
         for token in _tokens(pattern_match_text):
-            token_index.setdefault(token, set()).add(target_index)
+            token_index.setdefault((parent, token), set()).add(target_index)
 
     populated = [item for item in aggregates if item.observation_count]
     for item in populated:
@@ -376,7 +499,67 @@ def to_technique_cluster(aggregate: TechniqueAggregate) -> TechniqueCluster | No
         directional_consistency=aggregate.directional_consistency,
         confidence=aggregate.confidence,
         aliases=aggregate.aliases,
+        parent_strategy=aggregate.parent_strategy,
     )
+
+
+def to_parent_strategy_clusters(
+    aggregates: list[TechniqueAggregate], min_observations: int = 3,
+    min_repos: int = 2, min_consistency: float = 0.7,
+) -> list[TechniqueCluster]:
+    """Build candidate clusters at parent level from their child registry.
+
+    Total evidence is counted across children, but at least one child must be
+    active (repeated across repositories). This prevents a bag of unrelated
+    singletons from making a broad parent look statistically supported.
+    """
+    by_parent: dict[str, list[TechniqueAggregate]] = {}
+    for item in aggregates:
+        by_parent.setdefault(item.parent_strategy, []).append(item)
+    clusters = []
+    for parent, children in sorted(by_parent.items()):
+        active = [child for child in children if child.status == "active"]
+        repos = {repo for child in children for repo in child.repo_counts}
+        positive = sum(child.positive_count for child in children)
+        negative = sum(child.negative_count for child in children)
+        observations = sum(child.observation_count for child in children)
+        directional = positive / max(1, positive + negative)
+        if not (
+            active and observations >= min_observations and len(repos) >= min_repos
+            and positive > 0 and directional >= min_consistency
+        ):
+            continue
+        improvements = [
+            representative for child in children
+            for representative in child.representative_improvements
+        ]
+        improvements = _bounded_by_source(improvements, 12)
+        effect_values = [
+            abs(value) for child in children
+            for values in child.metric_effect_samples.values() for value in values
+        ]
+        clusters.append(TechniqueCluster(
+            technique=PARENT_STRATEGIES[parent],
+            normalized_key=parent,
+            parent_strategy=parent,
+            frequency=observations,
+            avg_delta=round(median(effect_values), 4) if effect_values else None,
+            framework_hints=sorted({key for child in children for key in child.framework_counts}),
+            applicable_signals=sorted({key for child in children for key in child.signal_counts})[:15],
+            why_it_works=" | ".join(dict.fromkeys(
+                item["why_it_works"] for item in improvements if item.get("why_it_works")
+            )),
+            example_code_patterns=[item["code_pattern"] for item in improvements],
+            example_problem_symptoms=[item["problem_symptom"] for item in improvements],
+            source_pr_ids=[item["source_id"] for item in improvements],
+            distinct_repo_count=len(repos),
+            positive_count=positive,
+            negative_count=negative,
+            directional_consistency=round(directional, 4),
+            confidence="high" if observations >= 10 and len(repos) >= 5 and directional >= 0.8 else "medium",
+            aliases=[child.canonical_name for child in children],
+        ))
+    return clusters
 
 
 def read_aggregates(path: Path) -> list[TechniqueAggregate]:

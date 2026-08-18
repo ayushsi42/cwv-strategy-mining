@@ -23,7 +23,9 @@ def _response_for_prompt(_system, user, **_kwargs):
         "source_id": item["source_id"],
         "is_page_performance": True,
         "rejection_reason": "",
-        "broad_family": "reduce-shipped-javascript",
+        "parent_strategy": "javascript-delivery",
+        "sub_strategy": "route-level code splitting",
+        "proposed_parent_strategy": None,
         "technique": "code split secondary route",
         "problem_symptom": "unused JavaScript",
         "code_pattern": "load the secondary route on demand",
@@ -58,15 +60,20 @@ def test_extraction_batches_and_reuses_per_record_cache() -> None:
     assert len(first) == len(second) == 5
 
 
-def test_family_guard_rejects_fallback_request_as_cache_reuse() -> None:
+def test_unknown_parent_is_kept_in_provisional_proposal_pool() -> None:
     extracted = _response_for_prompt(
         "", "ignored\n" + __import__("json").dumps([{"source_id": "org/repo-1#1"}]),
     )["results"][0]
     extracted.update({
-        "broad_family": "reuse-cache-and-data",
+        "parent_strategy": None,
+        "sub_strategy": "edge compute streaming",
+        "proposed_parent_strategy": "edge delivery architecture",
         "technique": "fallback request to alternate API",
         "mechanism": "make a second request after failure",
         "why_it_works": "the second request can return usable data",
     })
 
-    assert _to_pattern(_record(1), extracted) is None
+    pattern = _to_pattern(_record(1), extracted)
+    assert pattern is not None
+    assert pattern.parent_strategy == "unclassified"
+    assert pattern.proposed_parent_strategy == "edge delivery architecture"
