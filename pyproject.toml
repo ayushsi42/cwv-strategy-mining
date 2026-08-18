@@ -1,0 +1,21 @@
+[project]
+name = "cwv-playbook-miner"
+version = "0.1.0"
+description = "Mine real GitHub PRs for measured CWV techniques and generate platform-neutral, evidence-grounded candidates."
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "python-dotenv>=1.0",
+    "PyYAML>=6.0",
+    "huggingface_hub>=0.24",
+]
+
+[project.scripts]
+cwv-playbook-miner = "cwv_playbook_miner.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
