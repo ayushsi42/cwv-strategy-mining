@@ -4,8 +4,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from cwv_playbook_miner.aggregation.statistical import (
-    aggregate_patterns, resolve_substrategy_matches, to_parent_strategy_clusters,
-    to_technique_cluster,
+    aggregate_patterns, resolve_substrategy_matches, to_technique_cluster,
 )
 from cwv_playbook_miner.extraction.pattern_extract import ExtractedPattern
 from cwv_playbook_miner.taxonomy import write_parent_proposals
@@ -285,27 +284,3 @@ def test_unknown_parent_proposals_require_review_and_repetition() -> None:
     assert proposal["promotion_ready"] is True
     assert proposal["status"] == "human-review"
     assert aggregate_patterns(patterns) == []
-
-
-def test_parent_candidate_combines_children_but_requires_an_active_child() -> None:
-    patterns = [
-        _pattern("one/repo#1", "remove dependency", parent_strategy="network-payload", sub_strategy="remove unused shipped code"),
-        _pattern("two/repo#2", "prune dead code", parent_strategy="network-payload", sub_strategy="remove unused shipped code"),
-        _pattern("three/repo#3", "exclude source maps", parent_strategy="network-payload", sub_strategy="exclude non-runtime assets"),
-    ]
-    aggregates = aggregate_patterns(patterns)
-    clusters = to_parent_strategy_clusters(aggregates)
-
-    assert len(clusters) == 1
-    assert clusters[0].normalized_key == "network-payload"
-    assert clusters[0].frequency == 3
-    assert set(clusters[0].aliases) == {"remove unused shipped code", "exclude non-runtime assets"}
-
-
-def test_parent_singletons_cannot_manufacture_candidate() -> None:
-    patterns = [
-        _pattern("one/repo#1", "one", parent_strategy="network-payload", sub_strategy="remove unused code"),
-        _pattern("two/repo#2", "two", parent_strategy="network-payload", sub_strategy="compress json"),
-        _pattern("three/repo#3", "three", parent_strategy="network-payload", sub_strategy="strip source maps"),
-    ]
-    assert to_parent_strategy_clusters(aggregate_patterns(patterns)) == []

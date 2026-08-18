@@ -54,8 +54,12 @@ another call.
 `cluster` is a statistical aggregation stage rather than one-output-per-PR.
 Exact sub-strategy aliases merge locally. Ambiguous sibling names are resolved in
 batches and only within the same parent. A one-off child remains provisional; it is
-promoted after repetition across repositories. Candidates live at parent-strategy
-level and include their child variants. A parent requires at least one active child,
-3 total observations across 2 repositories, and 70% directional consistency.
+promoted after repetition across repositories. Parent strategies organize the
+registry; only coherent child strategies become playbooks. A child requires
+3 observations across 2 repositories and 70% directional consistency.
 Techniques outside all 15 parents enter `taxonomy_proposals.jsonl` for human review;
 they never expand the parent taxonomy automatically.
+
+Generation is two-pass: an evidence-grounded draft followed by a technical critic.
+The critic-revised Markdown is written directly; the local contract remains available
+for tests and diagnostics but does not block candidate output.

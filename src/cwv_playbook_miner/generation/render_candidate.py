@@ -1,4 +1,4 @@
-"""Stage 6: render platform-neutral, evidence-grounded CWV candidates."""
+"""Render evidence-grounded, platform-neutral CWV child playbooks."""
 
 from __future__ import annotations
 
@@ -16,32 +16,56 @@ from cwv_playbook_miner.llm.client import complete_text
 
 REQUIRED_SECTIONS = (
     "What this addresses",
-    "Evidence",
-    "Recommended approach",
+    "When to apply / when to skip",
+    "Required validation",
+    "Recommended approaches",
+    "Anti-patterns",
+    "How to verify",
+    "Evidence and confidence",
     "Risks and limitations",
-    "Anti-pattern evidence",
 )
 
+DRAFT_SYSTEM_PROMPT = """You author a production-quality, platform-neutral Core Web Vitals playbook for ONE evidence-qualified child strategy. The quality bar is an expert engineering runbook, not a PR summary.
 
-SYSTEM_PROMPT = """You write platform-neutral Core Web Vitals technique candidates from real pull-request evidence.
+Use only mechanisms, applicability conditions, code shapes, risks, and measurements supported by the supplied evidence. Do not invent universal percentages, browser-support numbers, APIs, validation rules, or bad patterns. Generalize repository/framework names only when the evidence supports the same mechanism across sources. Never add CMS, delivery-flavor, AEM, EDS, CS, AMS, or product-specific translation.
 
-Output only one Markdown document. Do not mention or translate to any CMS, delivery flavor, or framework unless that technology appears in the source PR itself. Do not invent code, validation rules, mechanisms, or anti-patterns.
-
-The document must use this structure:
+Output only one Markdown document with this exact contract:
 ---
-issue_type: <kebab-case slug>
+issue_type: <stable child id>
+parent_strategy: <stable parent id>
 risk_tier: <low|medium|high>
+cwv_metrics: [<measured metrics>]
 source_prs: [<repo#number>, ...]
+required_validation:
+  - <snake_case precondition grounded in evidence>
+forbidden_techniques:
+  - pattern: '<simple safe Python regex>'
+    reason: "<evidence-grounded rejection reason>"
 ---
-# <title>
+# <specific child strategy title>
+
+> **Risk tier:** ... · **Parent strategy:** ... · **CWV metric:** ...
 
 ## What this addresses
-## Evidence
-## Recommended approach
+## When to apply / when to skip
+Include explicit **Apply when:** and **Skip when:** lists.
+## Required validation
+Explain every front-matter validation ID and what evidence must be observed.
+## Recommended approaches
+Include at least one concrete fenced example marked Good, faithfully generalized from supplied patches.
+## Anti-patterns
+Include a concrete fenced example marked Bad and **Why this is bad:** only when supported by a pre-change patch or regression evidence. If no defensible code anti-pattern exists, say the evidence is insufficient and use forbidden_techniques: [].
+## How to verify
+Describe before/after measurement using only supplied metrics; do not promise a fixed improvement.
+## Evidence and confidence
+Separate observed facts from inference and cite every source PR.
 ## Risks and limitations
-## Anti-pattern evidence
 
-Use short source excerpts or faithful pseudocode only when directly supported by a supplied patch. If regression evidence is absent, say so explicitly in the Anti-pattern evidence section."""
+Prefer precise conditional guidance. A recommendation-only outcome is better than an unsafe guessed edit."""
+
+CRITIC_SYSTEM_PROMPT = """You are the final technical editor for a platform-neutral CWV playbook. Rewrite the supplied draft into a publication-quality document while preserving its issue_type and evidence.
+
+Reject and remove: mixed mechanisms, unsupported claims, fabricated code, generic filler, framework-specific claims presented as universal, unsafe regexes, and any CMS/AEM/delivery-flavor content. Ensure Apply/Skip gates are operational, every validation ID is explained, Good/Bad examples are evidence-derived, verification is measurable, and evidence is clearly separated from inference. If evidence cannot justify an anti-pattern regex, use an empty forbidden_techniques list. Output only the complete revised Markdown document with no commentary."""
 
 
 def _source_block(records: list[PRRecord]) -> str:
@@ -71,31 +95,29 @@ def build_prompt(
         f"Problem: {match.problem_symptom}\nCode pattern: {match.code_pattern}\n"
         f"Explanation: {match.why_it_works}"
         for match in antipatterns
-    ) or "No matched regression PR evidence was found. State this; do not fill the gap from general knowledge."
-
-    return f"""Classification:
+    ) or "No matched regression PR evidence was found. Do not fabricate one."
+    return f"""Stable identity:
 issue_type: {classification.target_issue_type}
+parent_strategy: {cluster.parent_strategy}
 risk_tier: {classification.risk_tier_guess}
-reason: {classification.action_reason}
+measured_metrics: {', '.join(cluster.cwv_metrics)}
 
-Extracted cluster summary (secondary evidence; prefer the raw source below):
-technique: {cluster.technique}
-why_it_works: {cluster.why_it_works}
+Child strategy summary:
+name: {cluster.technique}
+mechanism: {cluster.why_it_works}
 signals: {', '.join(cluster.applicable_signals)}
-source_prs: {', '.join(cluster.source_pr_ids)}
+aliases: {', '.join(cluster.aliases)}
 statistical support: {cluster.frequency} observations across {cluster.distinct_repo_count} repositories
 directional consistency: {cluster.directional_consistency:.1%} ({cluster.positive_count} improvements, {cluster.negative_count} regressions)
-absolute delta distribution: p25={cluster.delta_p25}, median={cluster.avg_delta}, p75={cluster.delta_p75}
+absolute measured-delta summary: p25={cluster.delta_p25}, median={cluster.avg_delta}, p75={cluster.delta_p75}
 confidence: {cluster.confidence}
-known aliases: {', '.join(cluster.aliases)}
 
-Raw improvement-side source PR evidence:
+Raw improvement evidence:
 {_source_block(source_records)}
 
-Regression-side evidence:
+Regression evidence:
 {regression_evidence}
-
-Write the candidate without adding platform-specific context absent from these sources."""
+"""
 
 
 def _extract_markdown_document(text: str) -> str:
@@ -118,9 +140,18 @@ def render_candidate(
     model: str | None,
     timeout: int,
 ) -> str:
-    prompt = build_prompt(cluster, classification, antipatterns, source_records)
+    evidence_prompt = build_prompt(cluster, classification, antipatterns, source_records)
+    draft = _extract_markdown_document(
+        complete_text(DRAFT_SYSTEM_PROMPT, evidence_prompt, backend=backend, model=model, timeout=timeout)
+    )
+    critic_prompt = f"""Evidence packet:
+{evidence_prompt}
+
+Draft to audit and rewrite:
+{draft}
+"""
     return _extract_markdown_document(
-        complete_text(SYSTEM_PROMPT, prompt, backend=backend, model=model, timeout=timeout)
+        complete_text(CRITIC_SYSTEM_PROMPT, critic_prompt, backend=backend, model=model, timeout=timeout)
     )
 
 
@@ -138,17 +169,53 @@ def validate_candidate_text(text: str, expected_issue_type: str) -> list[str]:
     except Exception as exc:  # noqa: BLE001
         return [str(exc)]
     if frontmatter.get("issue_type") != expected_issue_type:
-        problems.append(
-            f"issue_type {frontmatter.get('issue_type')!r} != expected {expected_issue_type!r}"
-        )
+        problems.append(f"issue_type {frontmatter.get('issue_type')!r} != expected {expected_issue_type!r}")
+    if not frontmatter.get("parent_strategy"):
+        problems.append("parent_strategy is required")
     if frontmatter.get("risk_tier") not in {"low", "medium", "high"}:
         problems.append("risk_tier must be low, medium, or high")
+    if not isinstance(frontmatter.get("cwv_metrics"), list) or not frontmatter["cwv_metrics"]:
+        problems.append("cwv_metrics must be a non-empty list")
     if not frontmatter.get("source_prs"):
         problems.append("source_prs must contain at least one source PR")
-    headings = set(re.findall(r"^## (.+)$", body, re.M))
+    validations = frontmatter.get("required_validation")
+    if not isinstance(validations, list) or not validations:
+        problems.append("required_validation must be a non-empty list")
+    elif any(not re.fullmatch(r"[a-z0-9_]+", str(item)) for item in validations):
+        problems.append("required_validation IDs must be snake_case")
+    forbidden = frontmatter.get("forbidden_techniques")
+    if not isinstance(forbidden, list):
+        problems.append("forbidden_techniques must be a list")
+    else:
+        for index, rule in enumerate(forbidden):
+            if not isinstance(rule, dict) or not rule.get("pattern") or not rule.get("reason"):
+                problems.append(f"forbidden_techniques[{index}] requires pattern and reason")
+                continue
+            try:
+                re.compile(rule["pattern"])
+            except re.error as exc:
+                problems.append(f"forbidden_techniques[{index}] invalid regex: {exc}")
+            if re.search(r"\([^)]*[+*][^)]*\)[+*]", rule["pattern"]):
+                problems.append(f"forbidden_techniques[{index}] may catastrophically backtrack")
+    if "applicable_flavors" in frontmatter or "flavor_overrides" in frontmatter:
+        problems.append("platform flavor fields are forbidden")
+
+    positions = []
     for section in REQUIRED_SECTIONS:
-        if section not in headings:
+        match = re.search(rf"^## {re.escape(section)}$", body, re.M)
+        if not match:
             problems.append(f"missing required section {section!r}")
+        else:
+            positions.append(match.start())
+    if len(positions) == len(REQUIRED_SECTIONS) and positions != sorted(positions):
+        problems.append("required sections are out of order")
+    if "**Apply when:**" not in body or "**Skip when:**" not in body:
+        problems.append("Apply when and Skip when gates are required")
+    if not re.search(r"```[a-zA-Z0-9_-]*\n[\s\S]*?\bGood\b", body):
+        problems.append("at least one fenced Good example is required")
+    anti_section = body.split("## Anti-patterns", 1)[-1].split("## How to verify", 1)[0]
+    if forbidden and ("Bad" not in anti_section or "**Why this is bad:**" not in anti_section):
+        problems.append("forbidden techniques require a Bad example and explanation")
     return problems
 
 

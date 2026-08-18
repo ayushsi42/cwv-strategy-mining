@@ -305,7 +305,7 @@ def resolve_substrategy_matches(
                 },
             })
 
-    system = """Resolve reusable web-performance sub-strategy aliases at guidance level. Each item already has a fixed parent strategy. Match differently worded implementation variants when an engineer would reasonably place them in one reusable recommendation, even if the exact component/resource differs. Examples: removing an unused runtime dependency and eliminating unused shipped code are one child; middleware user reuse and request-scoped authenticated data reuse are one child; skeleton reservation and avoiding a collapsing fallback are one layout-stability child. Do not match merely because outcomes are related, and never change the parent. Return strict JSON: {"results":[{"source_id":"...","canonical_id":"one supplied candidate id or null"}]}."""
+    system = """Resolve reusable web-performance sub-strategy aliases. Each item already has a fixed parent strategy. Match only the same actionable intervention with compatible mechanism, target resource, render phase, applicability gate, and failure modes. Framework/component names may differ. Do not merge merely because both reduce bytes, both use caching, or improve the same metric. Examples: middleware-fetched user reuse and request-scoped authenticated user reuse may match; ETag response validation must not merge with authenticated user reuse; excluding package metadata must not merge with removing runtime JavaScript dependencies. Never change the parent. Return strict JSON: {"results":[{"source_id":"...","canonical_id":"one supplied candidate id or null"}]}."""
     resolved = 0
     for start in range(0, len(unresolved), batch_size):
         batch = unresolved[start:start + batch_size]
@@ -500,66 +500,8 @@ def to_technique_cluster(aggregate: TechniqueAggregate) -> TechniqueCluster | No
         confidence=aggregate.confidence,
         aliases=aggregate.aliases,
         parent_strategy=aggregate.parent_strategy,
+        cwv_metrics=list(aggregate.metric_counts),
     )
-
-
-def to_parent_strategy_clusters(
-    aggregates: list[TechniqueAggregate], min_observations: int = 3,
-    min_repos: int = 2, min_consistency: float = 0.7,
-) -> list[TechniqueCluster]:
-    """Build candidate clusters at parent level from their child registry.
-
-    Total evidence is counted across children, but at least one child must be
-    active (repeated across repositories). This prevents a bag of unrelated
-    singletons from making a broad parent look statistically supported.
-    """
-    by_parent: dict[str, list[TechniqueAggregate]] = {}
-    for item in aggregates:
-        by_parent.setdefault(item.parent_strategy, []).append(item)
-    clusters = []
-    for parent, children in sorted(by_parent.items()):
-        active = [child for child in children if child.status == "active"]
-        repos = {repo for child in children for repo in child.repo_counts}
-        positive = sum(child.positive_count for child in children)
-        negative = sum(child.negative_count for child in children)
-        observations = sum(child.observation_count for child in children)
-        directional = positive / max(1, positive + negative)
-        if not (
-            active and observations >= min_observations and len(repos) >= min_repos
-            and positive > 0 and directional >= min_consistency
-        ):
-            continue
-        improvements = [
-            representative for child in children
-            for representative in child.representative_improvements
-        ]
-        improvements = _bounded_by_source(improvements, 12)
-        effect_values = [
-            abs(value) for child in children
-            for values in child.metric_effect_samples.values() for value in values
-        ]
-        clusters.append(TechniqueCluster(
-            technique=PARENT_STRATEGIES[parent],
-            normalized_key=parent,
-            parent_strategy=parent,
-            frequency=observations,
-            avg_delta=round(median(effect_values), 4) if effect_values else None,
-            framework_hints=sorted({key for child in children for key in child.framework_counts}),
-            applicable_signals=sorted({key for child in children for key in child.signal_counts})[:15],
-            why_it_works=" | ".join(dict.fromkeys(
-                item["why_it_works"] for item in improvements if item.get("why_it_works")
-            )),
-            example_code_patterns=[item["code_pattern"] for item in improvements],
-            example_problem_symptoms=[item["problem_symptom"] for item in improvements],
-            source_pr_ids=[item["source_id"] for item in improvements],
-            distinct_repo_count=len(repos),
-            positive_count=positive,
-            negative_count=negative,
-            directional_consistency=round(directional, 4),
-            confidence="high" if observations >= 10 and len(repos) >= 5 and directional >= 0.8 else "medium",
-            aliases=[child.canonical_name for child in children],
-        ))
-    return clusters
 
 
 def read_aggregates(path: Path) -> list[TechniqueAggregate]:

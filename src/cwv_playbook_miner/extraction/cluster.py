@@ -49,6 +49,7 @@ class TechniqueCluster:
     confidence: str = "provisional"
     aliases: list[str] = field(default_factory=list)
     parent_strategy: str = ""
+    cwv_metrics: list[str] = field(default_factory=list)
 
 
 def cluster_patterns(patterns: list[ExtractedPattern]) -> list[TechniqueCluster]:
@@ -113,6 +114,7 @@ def merge_clusters(clusters: list[TechniqueCluster]) -> TechniqueCluster:
         ),
         aliases=sorted({alias for c in clusters for alias in c.aliases}),
         parent_strategy=clusters[0].parent_strategy,
+        cwv_metrics=sorted({metric for c in clusters for metric in c.cwv_metrics}),
     )
 
 
