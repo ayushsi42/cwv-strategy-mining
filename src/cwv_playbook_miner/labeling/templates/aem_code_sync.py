@@ -6,12 +6,10 @@
     | :iphone: | [/](https://...aem.live/) | [![PERFORMANCE](https://img.shields.io/badge/PERFORMANCE-98-green...)]
     (https://googlechrome.github.io/lighthouse/scorecalc/#device=mobile&version=13.4.1&SI=3857.25...&FCP=1142&LCP=1501&TBT=0&CLS=0 "See Calculator") ...
 
-`aem-code-sync[bot]` -- an AEM/EDS-native bot (posts on real aem.live preview
-URLs). Best-precision template found: the scorecalc link's query string
-carries raw CWV metric *values* (FCP/LCP/TBT/CLS in ms, SI in ms), not just a
-0-100 score. Not the primary discovery channel (the mined corpus should stay
-generic-web per the AEM-translatability condition on the *source*), but real
-and worth a template.
+This is only an input-format parser for a real Lighthouse-reporting bot. The
+scorecalc link's query string carries raw CWV metric values (FCP/LCP/TBT/CLS
+in ms, SI in ms), not just a 0-100 score. It has no role in candidate
+normalization, grounding, classification, or generation.
 """
 
 from __future__ import annotations

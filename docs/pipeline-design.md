@@ -13,18 +13,21 @@ source + label -> extract -> cluster -> classify -> match regressions -> generat
    parse verified Lighthouse or bundle-report formats, calculate deltas, and
    fetch diffs only for labeled merged PRs. A larger external corpus supplies
    additional real improvement PRs when live-window yield is sparse.
-2. **Extract:** derive a technique, symptom, code pattern, explanation,
-   framework hint, and audit signal from each real PR and patch.
-3. **Aggregate:** assign observations to persistent canonical technique IDs.
-   Exact aliases resolve deterministically, high lexical similarity merges
-   automatically, and only borderline pairs use an LLM equivalence judge.
+2. **Extract:** one fused response rejects non-page-performance correlations and
+   derives the specific technique, broad controlled family, mechanism, resource,
+   render phase, symptom, code pattern, explanation, framework, and audit signal.
+   Up to eight compact PRs share one request. Per-record content-hash caching makes
+   reruns independent of batch boundaries and avoids repeat calls.
+3. **Aggregate:** merge observations locally by their controlled broad family,
+   retaining specific changes as aliases and examples. Legacy observations without
+   a family continue through deterministic exact/high-similarity matching, with an
+   LLM judge only for borderline legacy pairs.
    The registry stores observation/repository counts, direction consistency,
    per-metric effect distributions, aliases, and bounded representative PRs.
    A technique advances only with at least three observations, two independent
    repositories, and 70% improvement-side consistency by default.
-4. **Classify:** keep reusable delivered-page CWV techniques; drop incidental
-   correlations, unrelated build-time work, vague refactors, and duplicates.
-   Classification is platform-neutral.
+4. **Classify:** review only statistically eligible broad families for generic
+   usefulness and risk. Raw PR content is not resent at this stage.
 5. **Match regressions:** find extracted performance-decrease patterns matching
    each surviving cluster for independent anti-pattern evidence.
 6. **Generate:** render a generic Markdown candidate from the raw source PR
@@ -56,8 +59,8 @@ Required sections are `What this addresses`, `Evidence`, `Recommended approach`,
 
 ## Current limitations
 
-- Borderline semantic assignment still depends on an LLM judgment, but each
-  accepted alias is persisted so future runs resolve it deterministically.
+- Legacy records without a controlled family can require an LLM equivalence
+  judgment; newly fused extraction records never require pairwise LLM merging.
 - Bot templates without a verified live example never claim a measured signal.
 - Front-end and CI/docs filtering uses filename heuristics.
 - Generation validation checks structure and provenance fields; factual review

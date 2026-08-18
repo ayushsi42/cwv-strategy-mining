@@ -223,8 +223,10 @@ def cmd_extract(args: argparse.Namespace) -> None:
     input_path = DATA_PROCESSED / f"{args.signal_type}.jsonl"
     records = read_pr_jsonl(input_path)
     print(f"Extracting patterns from {len(records)} {args.signal_type} record(s) via backend={backend} "
-          f"(concurrency={args.concurrency})...")
-    patterns = pattern_extract.extract_patterns(records, backend, args.model, args.timeout, args.concurrency)
+          f"(batch_size={args.batch_size}, concurrency={args.concurrency})...")
+    patterns = pattern_extract.extract_patterns(
+        records, backend, args.model, args.timeout, args.concurrency, args.batch_size,
+    )
     out_path = DATA_PROCESSED / f"{args.signal_type}.patterns.jsonl"
     pattern_extract.write_jsonl(patterns, out_path)
     print(f"Wrote {len(patterns)} extracted patterns -> {out_path}")
@@ -403,7 +405,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("extract", help="stage 2: LLM pattern extraction")
     p.add_argument("--signal-type", default="perf_improvement", choices=["perf_improvement", "perf_decrease"])
-    p.add_argument("--concurrency", type=int, default=8)
+    p.add_argument("--concurrency", type=int, default=4, help="parallel LLM batches")
+    p.add_argument("--batch-size", type=int, default=8, help="compact PR records per LLM call")
     _add_llm_args(p)
     p.set_defaults(func=cmd_extract)
 
@@ -435,7 +438,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hours", type=int, default=6)
     p.add_argument("--use-cursor", action="store_true")
     p.add_argument("--candidates-dir", type=Path, default=CANDIDATES_DIR)
-    p.add_argument("--concurrency", type=int, default=8)
+    p.add_argument("--concurrency", type=int, default=4, help="parallel LLM batches")
+    p.add_argument("--batch-size", type=int, default=8, help="compact PR records per LLM call")
     p.add_argument("--min-observations", type=int, default=3)
     p.add_argument("--min-repos", type=int, default=2)
     p.add_argument("--min-consistency", type=float, default=0.7)

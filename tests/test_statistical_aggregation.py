@@ -11,6 +11,7 @@ def _pattern(
     mechanism: str = "",
     affected_resource: str = "",
     render_phase: str = "",
+    broad_family: str = "",
 ) -> ExtractedPattern:
     return ExtractedPattern(
         source_id=source,
@@ -26,6 +27,7 @@ def _pattern(
         mechanism=mechanism,
         affected_resource=affected_resource,
         render_phase=render_phase,
+        broad_family=broad_family,
     )
 
 
@@ -171,3 +173,22 @@ def test_prior_registry_persists_structured_signature_for_new_aliases() -> None:
 
 def test_literal_null_techniques_are_not_aggregated() -> None:
     assert aggregate_patterns([_pattern("one/repo#1", "null")]) == []
+
+
+def test_controlled_family_merges_different_specific_techniques_without_judge() -> None:
+    patterns = [
+        _pattern("one/repo#1", "deep import one icon", broad_family="reduce-shipped-javascript"),
+        _pattern("two/repo#2", "exclude tests from bundle", broad_family="reduce-shipped-javascript"),
+        _pattern("three/repo#3", "remove unreachable frontend code", broad_family="reduce-shipped-javascript"),
+    ]
+
+    def unexpected_judge(*_args):
+        raise AssertionError("family-normalized observations must not call the LLM judge")
+
+    aggregates = aggregate_patterns(patterns, judge=unexpected_judge)
+
+    assert len(aggregates) == 1
+    assert aggregates[0].canonical_id == "reduce-shipped-javascript"
+    assert aggregates[0].observation_count == 3
+    assert aggregates[0].distinct_repo_count == 3
+    assert aggregates[0].eligible

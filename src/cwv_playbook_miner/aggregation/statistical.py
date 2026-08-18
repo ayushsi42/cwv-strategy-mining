@@ -19,7 +19,7 @@ from statistics import median
 from typing import Callable
 
 from cwv_playbook_miner.extraction.cluster import TechniqueCluster, normalize_technique
-from cwv_playbook_miner.extraction.pattern_extract import ExtractedPattern
+from cwv_playbook_miner.extraction.pattern_extract import BROAD_TECHNIQUE_FAMILIES, ExtractedPattern
 from cwv_playbook_miner.llm.client import LLMError, complete_json
 
 
@@ -274,12 +274,28 @@ def aggregate_patterns(
         normalized = normalize_technique(pattern.technique)
         pattern_match_text = _match_text(pattern)
 
-        target_index = alias_lookup.get(normalized)
+        # Fused extraction assigns a controlled broad mechanism family. That
+        # assignment is the semantic normalization decision, so merge it
+        # locally and retain the PR-specific technique only as an alias. This
+        # avoids one LLM equivalence call per observation.
+        family = pattern.broad_family if pattern.broad_family in BROAD_TECHNIQUE_FAMILIES else ""
+        target_index = next(
+            (index for index, item in enumerate(aggregates) if item.canonical_id == family),
+            None,
+        ) if family else alias_lookup.get(normalized)
         target = aggregates[target_index] if target_index is not None else None
         candidate_indexes = set().union(
             *(token_index.get(token, set()) for token in _tokens(pattern_match_text))
         ) if _tokens(pattern_match_text) else set()
-        if target is None and candidate_indexes:
+        if target is None and family:
+            target = TechniqueAggregate(
+                canonical_id=family,
+                canonical_name=BROAD_TECHNIQUE_FAMILIES[family],
+                aliases=[],
+            )
+            aggregates.append(target)
+            target_index = len(aggregates) - 1
+        elif target is None and candidate_indexes:
             scored = [
                 (
                     max(

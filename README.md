@@ -37,7 +37,7 @@ so intermediate output is always inspectable):
 ```bash
 cwv-playbook-miner source --start 2026-08-10T00:00:00 --hours 24
 cwv-playbook-miner backfill --start 2025-08-18T00:00:00 --end 2026-08-18T00:00:00 --workers 4 --api-workers 2
-cwv-playbook-miner extract --signal-type perf_improvement
+cwv-playbook-miner extract --signal-type perf_improvement --batch-size 8
 cwv-playbook-miner extract --signal-type perf_decrease
 cwv-playbook-miner cluster
 cwv-playbook-miner classify
@@ -45,8 +45,12 @@ cwv-playbook-miner antipatterns
 cwv-playbook-miner generate
 ```
 
+`extract` evaluates eight compact PR records per LLM call by default. It combines
+page-performance rejection, structured extraction, and assignment to a controlled
+broad technique family. Results are cached by PR content, prompt version, backend,
+and model, so unchanged records do not consume another call.
+
 `cluster` is a statistical aggregation stage rather than one-output-per-PR.
-Its default evidence gate requires 3 observations across 2 repositories with
-at least 70% directional consistency. Stable canonical IDs and accepted aliases
-are persisted in `data/processed/technique_aggregates.jsonl`; the LLM is used
-only for borderline semantic matches.
+Family-normalized observations merge locally; legacy observations without a family
+can still use the alias matcher. The default evidence gate requires 3 observations
+across 2 repositories with at least 70% directional consistency.
