@@ -32,7 +32,8 @@ from cwv_playbook_miner.generation.render_candidate import render_candidate, wri
 from cwv_playbook_miner.llm.client import resolve_default_backend
 from cwv_playbook_miner.sourcing.gharchive_fetch import read_cursor, write_cursor
 from cwv_playbook_miner.sourcing.gharchive_mine import (
-    check_pr_merged, fetch_pr_comments, fetch_pr_diff, is_ci_docs_only, scan_range, touches_frontend,
+    check_pr_merged, fetch_pr_comments, fetch_pr_diff, human_flagged_candidates, is_ci_docs_only,
+    scan_range, touches_frontend,
 )
 from cwv_playbook_miner.labeling.signal_label import label_scan_result
 
@@ -158,10 +159,54 @@ def cmd_source(args: argparse.Namespace) -> None:
         )
         (perf_improvement if lp.signal_type == "perf_improvement" else perf_decrease).append(record)
 
+    # Human-flagged (non-bot review / inline review comment) candidates: no
+    # structured bot template ever matches prose (registry.py's
+    # generic_fallback always returns tier B, no parsed delta), so these
+    # never reach `measurable` above -- they're a separate, unquantified
+    # discovery signal. Extraction (stage 2) infers relevance and direction
+    # from the diff + the flagging comment's text; see
+    # pattern_extract.py's inferred_signal_type.
+    flagged = human_flagged_candidates(result.comment_hits) - measurable
+    flagged_in_window = flagged & set(result.merged_prs)
+    flagged_fallback_confirmed = []
+    for repo, pr_number in sorted(flagged - flagged_in_window):
+        if check_pr_merged(repo, pr_number):
+            flagged_fallback_confirmed.append((repo, pr_number))
+    flagged_merged = sorted(flagged_in_window | set(flagged_fallback_confirmed))
+    if flagged:
+        print(
+            f"  {len(flagged)} human-flagged PR(s) (non-bot review/review-comment), "
+            f"{len(flagged_merged)} confirmed merged"
+        )
+
+    hit_by_flagged_pr = {
+        (h.repo, h.pr_number): h for h in result.comment_hits if h.source in ("review", "review_comment")
+    }
+    perf_flagged: list[PRRecord] = []
+    for repo, pr_number in flagged_merged:
+        print(f"  fetching diff for {repo}#{pr_number} (perf_flagged, human-signal candidate)...")
+        changed_files = fetch_pr_diff(repo, pr_number)
+        if changed_files is None:
+            print("    skipped (diff fetch failed)")
+            continue
+        if is_ci_docs_only(changed_files):
+            print("    skipped (CI/docs-only diff)")
+            continue
+        if not touches_frontend(changed_files):
+            print("    skipped (no frontend files touched)")
+            continue
+        hit = hit_by_flagged_pr.get((repo, pr_number))
+        perf_flagged.append(PRRecord(
+            id=f"{repo}#{pr_number}", repo=repo, pr_number=pr_number, signal_type="perf_flagged",
+            metric_key=None, before=None, after=None, delta=None,
+            changed_files=changed_files, human_signal_text=hit.body if hit else None,
+        ))
+
     if getattr(args, "append", False):
         for records, filename in (
             (perf_improvement, "perf_improvement.jsonl"),
             (perf_decrease, "perf_decrease.jsonl"),
+            (perf_flagged, "perf_flagged.jsonl"),
         ):
             path = DATA_PROCESSED / filename
             existing = read_pr_jsonl(path) if path.exists() and path.stat().st_size else []
@@ -171,8 +216,9 @@ def cmd_source(args: argparse.Namespace) -> None:
     else:
         write_pr_jsonl(perf_improvement, DATA_PROCESSED / "perf_improvement.jsonl")
         write_pr_jsonl(perf_decrease, DATA_PROCESSED / "perf_decrease.jsonl")
-    print(f"Wrote {len(perf_improvement)} perf_improvement + {len(perf_decrease)} perf_decrease records "
-          f"to {DATA_PROCESSED}/")
+        write_pr_jsonl(perf_flagged, DATA_PROCESSED / "perf_flagged.jsonl")
+    print(f"Wrote {len(perf_improvement)} perf_improvement + {len(perf_decrease)} perf_decrease + "
+          f"{len(perf_flagged)} perf_flagged records to {DATA_PROCESSED}/")
     if getattr(args, "use_cursor", False):
         write_cursor(CURSOR_PATH, end - timedelta(hours=1))
 
@@ -237,7 +283,9 @@ def cmd_cluster(args: argparse.Namespace) -> None:
     improvement_patterns = pattern_extract.read_jsonl(DATA_PROCESSED / "perf_improvement.patterns.jsonl")
     decrease_path = DATA_PROCESSED / "perf_decrease.patterns.jsonl"
     decrease_patterns = pattern_extract.read_jsonl(decrease_path) if decrease_path.exists() else []
-    patterns = improvement_patterns + decrease_patterns
+    flagged_path = DATA_PROCESSED / "perf_flagged.patterns.jsonl"
+    flagged_patterns = pattern_extract.read_jsonl(flagged_path) if flagged_path.exists() else []
+    patterns = improvement_patterns + decrease_patterns + flagged_patterns
     aggregate_path = DATA_PROCESSED / "technique_aggregates.jsonl"
     prior = [] if getattr(args, "rebuild_registry", False) else read_aggregates(aggregate_path)
     if getattr(args, "rebuild_registry", False):
@@ -314,9 +362,17 @@ def cmd_generate(args: argparse.Namespace) -> None:
     all_antipatterns = list(antipatterns_mod.AntiPatternMatch(**json.loads(line)) for line in
                              (DATA_PROCESSED / "antipatterns.jsonl").open(encoding="utf-8")) \
         if (DATA_PROCESSED / "antipatterns.jsonl").exists() else []
+    # A representative_improvements source_id can now live in either file --
+    # a perf_flagged-origin PR's raw record (with the diff) only exists in
+    # perf_flagged.jsonl, since it never had a bot-parsed delta to land in
+    # perf_improvement.jsonl.
+    flagged_source_path = DATA_PROCESSED / "perf_flagged.jsonl"
     source_records = {
         record.id: record
-        for record in read_pr_jsonl(DATA_PROCESSED / "perf_improvement.jsonl")
+        for record in (
+            read_pr_jsonl(DATA_PROCESSED / "perf_improvement.jsonl")
+            + (read_pr_jsonl(flagged_source_path) if flagged_source_path.exists() else [])
+        )
     }
 
     survivors = [c for c in classifications if c.survives]
@@ -357,11 +413,13 @@ def cmd_generate(args: argparse.Namespace) -> None:
 
 def cmd_run_all(args: argparse.Namespace) -> None:
     cmd_source(args)
-    if (DATA_PROCESSED / "perf_improvement.jsonl").stat().st_size == 0:
-        print("No perf_improvement records found in this window -- nothing to extract. "
-              "Try a wider --hours or different --start.")
+    signal_types = ("perf_improvement", "perf_decrease", "perf_flagged")
+    if not any((DATA_PROCESSED / f"{t}.jsonl").exists() and (DATA_PROCESSED / f"{t}.jsonl").stat().st_size
+               for t in signal_types):
+        print("No perf_improvement/perf_decrease/perf_flagged records found in this window -- "
+              "nothing to extract. Try a wider --hours or different --start.")
         return
-    for signal_type in ("perf_improvement", "perf_decrease"):
+    for signal_type in signal_types:
         path = DATA_PROCESSED / f"{signal_type}.jsonl"
         if path.exists() and path.stat().st_size > 0:
             args.signal_type = signal_type
@@ -403,7 +461,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_import_external)
 
     p = sub.add_parser("extract", help="stage 2: LLM pattern extraction")
-    p.add_argument("--signal-type", default="perf_improvement", choices=["perf_improvement", "perf_decrease"])
+    p.add_argument("--signal-type", default="perf_improvement",
+                    choices=["perf_improvement", "perf_decrease", "perf_flagged"])
     p.add_argument("--concurrency", type=int, default=4, help="parallel LLM batches")
     p.add_argument("--batch-size", type=int, default=8, help="compact PR records per LLM call")
     _add_llm_args(p)

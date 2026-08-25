@@ -20,7 +20,7 @@ from cwv_playbook_miner.llm.client import complete_json
 from cwv_playbook_miner.taxonomy import PARENT_STRATEGIES, parent_taxonomy_prompt
 
 
-PROMPT_VERSION = "hierarchical-extraction-v1"
+PROMPT_VERSION = "hierarchical-extraction-v2"
 
 SYSTEM_PROMPT = f"""You are a strict web-performance evidence extractor. Evaluate every supplied
 GitHub PR independently. Return one result carrying the same source_id for every input.
@@ -45,6 +45,14 @@ optimization; onboarding hints are not deferred work; CSS variables are not netw
 reduction; client-side execution is not third-party-cost reduction; build/postinstall work is
 never font delivery. Reject a record when no family is a direct, defensible fit.
 
+Some inputs have signal_type "perf_flagged": a human reviewer wrote something performance-related
+about this merged PR (given as "human_signal"), but no bot posted a parseable before/after number,
+so metric.key/before/after/delta are all null. For these, judge relevance from the diff and the
+human_signal text exactly as you would any other input, and also set inferred_signal_type to
+"perf_improvement" or "perf_decrease" -- your best-judgment direction of the change -- only when the
+diff and human_signal make it reasonably clear; otherwise null. Leave inferred_signal_type null for
+every other input (its own signal_type is already known).
+
 Return strict JSON:
 {{"results": [{{
   "source_id": "exact input id",
@@ -61,7 +69,8 @@ Return strict JSON:
   "applicable_signal": "CWV/Lighthouse trigger",
   "mechanism": "normalized action",
   "affected_resource": "normalized target",
-  "render_phase": "initial-load | interaction | server-response | background"
+  "render_phase": "initial-load | interaction | server-response | background",
+  "inferred_signal_type": "perf_improvement | perf_decrease | null -- only for perf_flagged inputs"
 }}]}}
 
 Do not infer performance from score correlation alone. A rejected item must use false and
@@ -77,7 +86,7 @@ def _compact_record(record: PRRecord) -> dict:
             "filename": changed_file.get("filename", ""),
             "patch": (changed_file.get("patch") or "")[:1500],
         })
-    return {
+    compact = {
         "source_id": record.id,
         "repo": record.repo,
         "title": record.title or "",
@@ -91,6 +100,9 @@ def _compact_record(record: PRRecord) -> dict:
         "description": (record.pr_body_markdown or "")[:2000],
         "changed_files": files,
     }
+    if record.human_signal_text:
+        compact["human_signal"] = record.human_signal_text[:500]
+    return compact
 
 
 def build_batch_prompt(records: list[PRRecord]) -> str:
@@ -136,14 +148,31 @@ class ExtractedPattern:
     broad_family: str = ""  # legacy field; ignored by hierarchical aggregation
 
 
+def _resolve_signal_type(record: PRRecord, extracted: dict) -> str | None:
+    """perf_improvement/perf_decrease records already know their polarity
+    (a structured bot template parsed it in stage 1). perf_flagged records
+    never had one -- match_template's generic_fallback always returns None
+    for prose, so there's no delta to trust -- polarity must come from the
+    LLM's own judgment of the diff + human_signal_text instead. Returning
+    None here (rather than guessing) drops the record before it ever
+    reaches aggregation, which trusts pattern.signal_type verbatim for
+    positive_count/negative_count."""
+    if record.signal_type != "perf_flagged":
+        return record.signal_type
+    inferred = extracted.get("inferred_signal_type")
+    return inferred if inferred in ("perf_improvement", "perf_decrease") else None
+
+
 def _to_pattern(record: PRRecord, extracted: dict) -> ExtractedPattern | None:
     technique = extracted.get("technique")
     parent = extracted.get("parent_strategy")
     sub_strategy = extracted.get("sub_strategy")
     proposed_parent = extracted.get("proposed_parent_strategy") or ""
     valid_parent = parent in PARENT_STRATEGIES
+    signal_type = _resolve_signal_type(record, extracted)
     if (
-        extracted.get("is_page_performance") is not True
+        signal_type is None
+        or extracted.get("is_page_performance") is not True
         or not isinstance(technique, str)
         or not technique.strip()
         or technique.strip().lower() in {"null", "none", "n/a"}
@@ -155,7 +184,7 @@ def _to_pattern(record: PRRecord, extracted: dict) -> ExtractedPattern | None:
     return ExtractedPattern(
         source_id=record.id,
         source_repo=record.repo,
-        signal_type=record.signal_type,
+        signal_type=signal_type,
         technique=technique.strip(),
         parent_strategy=parent if valid_parent else "unclassified",
         sub_strategy=sub_strategy.strip(),

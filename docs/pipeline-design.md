@@ -9,10 +9,14 @@ changes and turns them into platform-neutral, reviewable technique candidates.
 source + label -> extract -> cluster -> classify -> match regressions -> generate
 ```
 
-1. **Source and label:** scan GH Archive bot comments and merged PR events,
-   parse verified Lighthouse or bundle-report formats, calculate deltas, and
-   fetch diffs only for labeled merged PRs. A larger external corpus supplies
-   additional real improvement PRs when live-window yield is sparse.
+1. **Source and label:** scan GH Archive bot comments, bot reviews/review
+   comments, and merged PR events; parse verified Lighthouse or bundle-report
+   formats, calculate deltas, and fetch diffs only for labeled merged PRs. In
+   parallel, non-bot reviews/review comments matching a broader human-language
+   marker set feed a separate `perf_flagged` (unquantified) discovery path --
+   no delta parses for these, so extraction infers relevance and direction
+   directly from the diff and the flagging comment. A larger external corpus
+   supplies additional real improvement PRs when live-window yield is sparse.
 2. **Extract:** one fused response rejects non-page-performance correlations and
    derives the specific technique, one of 15 stable parent strategies, a proposed
    reusable sub-strategy, mechanism, resource, render phase, symptom, code pattern,
@@ -76,3 +80,7 @@ anti-patterns, verification, evidence/confidence, and risks/limitations.
   factual approval remains a human responsibility.
 - No Checks API channel is scanned, so tools reporting only through checks are
   not discovered.
+- `IssuesEvent`-based discovery (a flagged Issue, not a PR) and `ReleaseEvent`
+  changelog mining are both deliberately out of scope for now -- neither
+  structurally points at a PR number for free the way a review/review-comment
+  does; each would need its own extra `gh api` linking hop.

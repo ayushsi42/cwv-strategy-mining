@@ -59,6 +59,26 @@ def test_common_observations_become_one_eligible_aggregate() -> None:
     assert to_technique_cluster(item).confidence == "medium"
 
 
+def test_perf_flagged_origin_pattern_with_no_metric_aggregates_normally() -> None:
+    """A perf_flagged PRRecord never had a bot-parsed delta, so by the time
+    extraction resolves its signal_type (see pattern_extract._resolve_signal_type),
+    measured_delta is still {metric_key: None, delta: None}. Aggregation must
+    not crash on that and must count it purely from signal_type, same as any
+    other pattern -- it's indistinguishable here from a template-derived one."""
+    patterns = [
+        _pattern("one/repo#1", "Reserve space for async content", metric=None, delta=None),
+        _pattern("two/repo#2", "reserve space for async content", metric=None, delta=None),
+    ]
+    aggregates = aggregate_patterns(patterns, min_observations=2, min_repos=2)
+
+    assert len(aggregates) == 1
+    item = aggregates[0]
+    assert item.observation_count == 2
+    assert item.positive_count == 2
+    assert item.metric_summaries == {}
+    assert item.eligible
+
+
 def test_llm_judge_is_only_used_for_borderline_alias() -> None:
     patterns = [
         _pattern("one/repo#1", "defer offscreen images"),

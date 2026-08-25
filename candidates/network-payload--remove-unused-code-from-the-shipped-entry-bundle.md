@@ -2,245 +2,223 @@
 issue_type: network-payload--remove-unused-code-from-the-shipped-entry-bundle
 parent_strategy: network-payload
 risk_tier: low
-cwv_metrics: [bundle_size_delta_pct]
-source_prs: [Jujulego/jill#1258, ant-design/ant-design#55179, ant-design/x#1198]
+cwv_metrics: [bundle_size_delta_pct, performance]
+source_prs: [vlossom-ui/vlossom#117, storybookjs/storybook#32594, Automattic/wp-calypso#108174]
 required_validation:
-  - shipped_entry_bundle_contains_no_manual_chunk_for_removed_code
-  - runtime_dependency_is_not_referenced_by_the_shipped_entry_bundle
-  - locale_module_is_re_exported_from_the_shared_locale_entry
+  - explicit_component_registration_only
+  - no_root_package_import_for_tree_shakeable_modules
 forbidden_techniques: []
 ---
 
 # Remove unused code from the shipped entry bundle
 
-> **Risk tier:** low · **Parent strategy:** network-payload · **CWV metric:** `bundle_size_delta_pct`
+> **Risk tier:** low · **Parent strategy:** network-payload · **CWV metrics:** `bundle_size_delta_pct`, `performance`
 
-## Summary
+## What this strategy addresses
 
-This strategy applies when code that is currently shipped in the entry bundle can be removed without changing supported runtime behavior. The supplied evidence supports three removal patterns:
+This strategy reduces shipped JavaScript by preventing unused modules from being pulled into the initial entry bundle.
 
-1. **Remove packaging-only chunking** for code that no longer needs to be isolated into a separate shipped chunk.
-2. **Remove unused runtime imports or calls** from the shipped entry path.
-3. **Split locale data into per-language modules and re-export it through the shared locale entry** so the public locale surface stays stable while the shipped payload is reduced.
+The evidence supports three related mechanisms:
 
-The measured outcome in the evidence is a reduction in shipped JavaScript payload, tracked by `bundle_size_delta_pct`.
+1. **Limit global component registration**
+   - In Vlossom, `createVlossom({ components: VlossomComponents })` registers a component map explicitly.
+   - The repository guide states that importing `VlossomComponents` brings all components into the bundle, while importing only the needed components enables tree shaking.
+   - The same change adds `component-map.ts` and `component-types.ts`, making the “all components” path explicit and the narrower path available.
 
-## Apply / Skip gates
+2. **Import narrower entrypoints instead of package roots**
+   - Storybook replaced root imports from `react-aria` and `react-stately` with narrower submodule imports such as `@react-aria/overlays`, `@react-aria/dialog`, `@react-aria/menu`, `@react-aria/utils`, `@react-stately/menu`, and `@react-stately/tree`.
+   - It also switched `react-aria-components` usage to patched per-component entrypoints such as `react-aria-components/patched-dist/Dialog`, `.../Modal`, `.../Popover`, `.../Tabs`, `.../Heading`, and `.../Text`.
+
+3. **Remove unused exported code from shipped modules**
+   - In wp-calypso, several exported helpers were deleted when they were no longer needed, including `createOdysseyConfigFromKey`, `inIframe`, `useOpenCommandPalette`, `getPressableShortName`, `getReasonLabelByValue`, and `canUpdateA4AFullyManagedSetting`.
+   - This is the same payload-reduction mechanism when dead exports are removed from the shipped surface.
+
+This strategy is about **making the shipped entry bundle smaller by changing what is imported, registered, or exported**. It is not about lazy loading, route splitting, or deferring work to later interaction.
+
+## Evidence summary
+
+### Vlossom UI
+- `packages/vlossom/.storybook/preview.ts`
+- `packages/vlossom/.storybook-chromatic/preview.ts`
+- `packages/vlossom/sandbox/sandbox.ts`
+- `packages/vlossom/src/components/component-map.ts`
+- `packages/vlossom/src/components/component-types.ts`
+- `packages/vlossom/VLOSSOM_USAGE_GUIDE.md`
+
+Observed changes:
+- `createVlossom()` became `createVlossom({ components: VlossomComponents })`.
+- A full component map was introduced.
+- The guide explicitly distinguishes between importing the full component map and importing only the needed components.
+
+### Storybook
+- `code/.eslintrc.js`
+- `code/core/package.json`
+- `code/core/src/components/components/Modal/Modal.tsx`
+- `code/core/src/components/components/Modal/Modal.styled.tsx`
+- `code/core/src/components/components/Popover/WithPopover.tsx`
+- `code/core/src/components/components/Select/Select.tsx`
+- `code/core/src/components/components/Tabs/StatelessTab.tsx`
+- `code/.yarn/patches/react-aria-components-npm-1.12.2-6c5dcdafab.patch`
+
+Observed changes:
+- Root imports from `react-aria` and `react-stately` were replaced with narrower submodule imports.
+- `react-aria-components` root imports were replaced with patched per-component entrypoints.
+- The ESLint rule was updated to reject broad root imports in favor of narrower entrypoints.
+
+### wp-calypso
+- `apps/odyssey-stats/src/lib/create-odyssey-config.ts`
+- `apps/wpcom-block-editor/src/utils.js`
+- `client/a8c-for-agencies/sections/marketplace/pressable-overview/hooks/use-existing-pressable-plan.ts`
+- `client/a8c-for-agencies/sections/marketplace/pressable-overview/lib/get-pressable-short-name.ts`
+- `client/components/marketing-survey/cancel-purchase-form/cancellation-reasons.ts`
+- `client/dashboard/app/command-palette/README.md`
+- `client/dashboard/app/command-palette/utils.ts`
+- `client/dashboard/sites/settings-agency/index.tsx`
+
+Observed changes:
+- Unused helpers and exports were removed outright from shipped code.
+
+## When to apply / when to skip
 
 ### Apply when
-- The shipped entry bundle contains code that is not required for the supported runtime path.
-- A dependency is imported only for a call site that can be removed without changing supported behavior.
-- Locale data is duplicated across entry points and can be factored into a dedicated locale module with a shared re-export.
-- A manual chunk exists only to package code that is no longer needed in the shipped entry.
+- The shipped entry bundle includes modules that are not all needed at startup.
+- A package or app imports from a broad root entrypoint when narrower submodule entrypoints exist.
+- A component or plugin bootstrap registers a whole catalog, but only a subset is needed for the shipped path.
+- A helper or export is no longer consumed and can be removed from the shipped surface.
+- Bundle analysis or build output indicates a measurable reduction opportunity in the entry bundle.
 
 ### Skip when
-- The code is still required by the shipped entry path.
-- Removing the dependency would change supported behavior or remove a public runtime capability.
-- The split would add indirection without reducing shipped code.
-- The shared locale entry would no longer remain the consumer-facing access point after the change.
+- The code path is intentionally “all-in” and the full catalog is required for the shipped experience.
+- No evidence-backed narrower entrypoint or export shape exists.
+- The change would require speculative refactoring without proof that unused code is excluded from the shipped bundle.
+- The goal is to defer work until later interaction; that is a different strategy such as lazy loading or route-level splitting.
 
 ## Required validation
 
-### `shipped_entry_bundle_contains_no_manual_chunk_for_removed_code`
-**What it checks:** The shipped entry bundle no longer contains a packaging-only manual chunk for code that was removed from the entry path.
+### `explicit_component_registration_only`
 
-**Why it matters:** If the removed code is still isolated into a manual chunk, the shipped bundle may still carry unnecessary packaging overhead.
+Validate that the shipped bootstrap or plugin initialization only registers the components intended for the shipped path.
 
-**Evidence:** In `Jujulego/jill#1258`, `rollup.config.js` removed the `manualChunks` entry for `parser`, indicating that the parser code was no longer being split out as a separate shipped chunk.
+What to check:
+- A registration call receives an explicit component map or explicit named imports.
+- The code path does not rely on implicit “register everything” behavior unless that is the intended full-bundle mode.
+- If a full-map export exists, it is clearly documented as the non-tree-shaken path.
 
-### `runtime_dependency_is_not_referenced_by_the_shipped_entry_bundle`
-**What it checks:** The shipped entry path no longer imports or calls the removed runtime dependency.
+Evidence-derived support:
+- Vlossom’s `createVlossom({ components: VlossomComponents })` shows explicit registration.
+- The guide states that importing `VlossomComponents` includes all components, while importing only needed components enables tree shaking.
 
-**Why it matters:** A dependency that is still referenced by the entry bundle remains part of the shipped payload.
+### `no_root_package_import_for_tree_shakeable_modules`
 
-**Evidence:** In `Jujulego/jill#1258`, `src/main.ts` removed `captureMessage` from `@sentry/node`, while preserving the rest of the CLI flow.
+Validate that tree-shakeable dependencies are imported from narrower entrypoints rather than package roots.
 
-### `locale_module_is_re_exported_from_the_shared_locale_entry`
-**What it checks:** A locale is defined in a dedicated module and then included through the shared locale registry or aggregate locale entry.
+What to check:
+- Root imports are replaced with submodule imports where the patch shows a supported narrower path.
+- The chosen entrypoint matches the evidence, such as `@react-aria/overlays`, `@react-aria/dialog`, `@react-aria/menu`, `@react-stately/menu`, `@react-stately/tree`, or `react-aria-components/patched-dist/<Component>`.
+- The import change is consistent with the package’s tree-shaking guidance or patching approach.
 
-**Why it matters:** This preserves the public locale import surface while allowing locale code to be organized and shipped more efficiently.
+Evidence-derived support:
+- Storybook’s ESLint rule explicitly rejects root imports from `react-aria`, `react-stately`, and `react-aria-components` in favor of narrower submodules or patched component entrypoints.
 
-**Evidence:** In `ant-design/ant-design#55179`, `components/date-picker/locale/mr_IN.ts`, `components/time-picker/locale/mr_IN.ts`, and `components/locale/mr_IN.ts` show the split-and-re-export pattern.
+## Recommended approaches
 
-## Evidence-derived implementation patterns
+### 1) Register only the components needed by the shipped path
 
-### 1) Remove packaging-only chunking when the code is no longer needed
+Use explicit component registration instead of importing a full component catalog when the startup path does not need every component.
 
-**Good**
-```js
-// rollup.config.js
-const options = {
-  output: {
-    sourcemap: true,
-    chunkFileNames: '[name].js',
-    generatedCode: 'es5',
-  },
-  plugins: [
-    nodeResolve({ exportConditions: ['node'] }),
-  ],
-};
-```
-
-**Evidence basis:** `Jujulego/jill#1258` removed the `manualChunks` entry for `parser`.
-
-**Bad**
-```js
-// Keeps a packaging-only split for code that is no longer needed in the shipped entry
-const options = {
-  output: {
-    sourcemap: true,
-    chunkFileNames: '[name].js',
-    generatedCode: 'es5',
-    manualChunks: {
-      parser: ['./src/cli/parser.js'],
-    },
-  },
-};
-```
-
-### 2) Remove unused runtime calls from the shipped entry path
-
-**Good**
 ```ts
-import { captureException, startSpan } from '@sentry/node';
+import { createApp } from 'vue';
+import { createVlossom, VsAvatar, VsButton } from 'vlossom';
+import App from './App.vue';
 
-void startSpan({ name: 'jill', op: 'cli.main', attributes: { 'cli.argv': argv } }, () =>
-  parser
-    .wrap(parser.terminalWidth())
-    .fail((msg, err) => {
-      const logger = inject$(LOGGER);
+const app = createApp(App);
 
-      if (msg) {
-        logger.error(msg);
-      } else if (err instanceof ClientError) {
-        logger.warning(err.message);
-      } else {
-        captureException(err);
-      }
-    }),
+app.use(
+  createVlossom({
+    components: { VsAvatar, VsButton },
+    theme: 'dark',
+    colorScheme: { VsButton: 'blue' },
+  }),
 );
+
+app.mount('#app');
 ```
 
-**Evidence basis:** `Jujulego/jill#1258` removed `captureMessage` from the CLI entry path while keeping the rest of the flow intact.
+This is the evidence-backed good shape because it keeps the shipped registration surface limited to the components actually referenced.
 
-**Bad**
-```ts
-import { captureException, captureMessage, startSpan } from '@sentry/node';
+### 2) Prefer narrower submodule imports over package-root imports
 
-void startSpan({ name: 'jill', op: 'cli.main', attributes: { 'cli.argv': argv } }, () =>
-  parser
-    .wrap(parser.terminalWidth())
-    .fail((msg, err) => {
-      const logger = inject$(LOGGER);
-
-      if (msg) {
-        logger.error(msg);
-        captureMessage(msg, { level: 'error' });
-      } else if (err instanceof ClientError) {
-        logger.warning(err.message);
-      } else {
-        captureException(err);
-      }
-    }),
-);
-```
-
-### 3) Split locale data into per-language modules and re-export through the shared locale entry
-
-**Good**
-```ts
-// components/date-picker/locale/mr_IN.ts
-import CalendarLocale from '@rc-component/picker/lib/locale/mr_IN';
-import TimePickerLocale from '../../time-picker/locale/mr_IN';
-import type { PickerLocale } from '../generatePicker';
-
-const locale: PickerLocale = {
-  lang: {
-    placeholder: 'दिनांक निवडा',
-    yearPlaceholder: 'वर्ष निवडा',
-    quarterPlaceholder: 'तिमाही निवडा',
-    monthPlaceholder: 'महिना निवडा',
-    weekPlaceholder: 'आठवडा निवडा',
-    rangePlaceholder: ['प्रारंभ तारीख', 'शेवटची तारीख'],
-    ...CalendarLocale,
-  },
-  timePickerLocale: {
-    ...TimePickerLocale,
-  },
-};
-
-export default locale;
-```
+When a dependency exposes tree-shakeable submodules, import the specific submodule used by the component.
 
 ```ts
-// components/locale/mr_IN.ts
-import Pagination from '@rc-component/pagination/lib/locale/mr_IN';
-
-import type { Locale } from '.';
-import Calendar from '../calendar/locale/mr_IN';
-import DatePicker from '../date-picker/locale/mr_IN';
-import TimePicker from '../time-picker/locale/mr_IN';
-
-const localeValues: Locale = {
-  locale: 'mr',
-  DatePicker,
-  TimePicker,
-  Calendar,
-  Pagination,
-};
-
-export default localeValues;
+import { useInteractOutside } from '@react-aria/interactions';
+import { Overlay, useOverlay, useOverlayPosition } from '@react-aria/overlays';
+import { useOverlayTriggerState } from '@react-stately/overlays';
 ```
 
-**Evidence basis:** `ant-design/ant-design#55179` added `mr_IN` locale modules and registered them through the shared locale list.
+This matches the Storybook patch pattern and avoids pulling a broader root package surface into the bundle.
 
-**Bad**
+### 3) Use patched per-component entrypoints when the package root is too broad
+
 ```ts
-// Locale defined only in a feature module and not re-exported through the shared locale entry
-export default {
-  locale: 'mr',
-  DatePicker: { /* ... */ },
-  TimePicker: { /* ... */ },
-};
+import { Dialog } from 'react-aria-components/patched-dist/Dialog';
+import { ModalOverlay, Modal as ModalUpstream } from 'react-aria-components/patched-dist/Modal';
+import { Tab } from 'react-aria-components/patched-dist/Tabs';
 ```
 
-## Verification
+This is supported by the evidence where Storybook moved from root imports to patched component entrypoints optimized for tree shaking.
 
-Use `bundle_size_delta_pct` as the primary measurable check.
+### 4) Remove dead exports when they are no longer part of the shipped surface
 
-### Minimum verification steps
-1. Measure the shipped entry bundle before the change.
-2. Apply the removal or factoring change.
-3. Measure the shipped entry bundle again.
-4. Confirm the delta moves in the expected direction for the change.
+If a helper is no longer consumed, delete it rather than keeping it in the shipped module.
 
-### Validation-specific checks
-- For `shipped_entry_bundle_contains_no_manual_chunk_for_removed_code`:
-  - confirm the removed code is no longer isolated into a manual chunk in the shipped build configuration.
-- For `runtime_dependency_is_not_referenced_by_the_shipped_entry_bundle`:
-  - confirm the shipped entry path no longer imports or calls the removed dependency.
-- For `locale_module_is_re_exported_from_the_shared_locale_entry`:
-  - confirm the locale exists in a dedicated module and is reachable through the shared locale entry.
+```ts
+export default function createOdysseyConfigFromConfigData(configData: ConfigData) {
+  const configApi = new ConfigApi();
+  configApi.setConfigData(configData);
+  return configApi;
+}
+```
 
-## Evidence and inference
+This reflects the same mechanism shown by wp-calypso removing unused helpers and leaving only the needed exported entrypoint.
+
+## Anti-patterns
+
+The evidence is sufficient to reject broad root imports and implicit “register everything” patterns, but it is **not** sufficient to define a universal bad-code regex beyond the documented import shapes. Therefore, no additional forbidden technique patterns are asserted here.
+
+## How to verify
+
+Use the same measurement family already present in the evidence:
+
+- Compare `bundle_size_delta_pct` before and after the change.
+- Check the associated `performance` signal used by the repository’s measurement process.
+- If the repository reports bundle-size or Lighthouse JS payload metrics, compare those same metrics before and after; do not substitute a different metric family.
+
+Verification should answer:
+- Did the shipped entry bundle exclude the unused modules after the change?
+- Did the measured bundle-size delta move in the expected direction?
+- Did the performance signal improve, remain flat, or regress?
+
+Do not promise a fixed improvement. The evidence supports that this strategy often reduces payload, with observed positive and negative outcomes.
+
+## Evidence and confidence
 
 ### Observed facts
-- `Jujulego/jill#1258` removed a `manualChunks` entry for `parser` and removed `captureMessage` from the CLI entry path.
-- `ant-design/ant-design#55179` added `mr_IN` locale modules and registered them through the shared locale list.
-- `ant-design/x#1198` removed unused dependencies from `packages/x-markdown/package.json` and refactored animation code away from `@react-spring/web`, with a reported `bundle_size_delta_pct` improvement.
+- **Vlossom UI**: `createVlossom({ components: VlossomComponents })` was introduced, and the repository documentation explicitly states that importing `VlossomComponents` includes all components while importing only needed components enables complete tree shaking.
+- **Storybook**: root imports from `react-aria` and `react-stately` were replaced with narrower submodule imports; `react-aria-components` root imports were replaced with patched per-component entrypoints.
+- **wp-calypso**: several unused helpers and exports were deleted outright from shipped code.
 
 ### Inference
-- Removing unused shipped code reduces the JavaScript payload that consumers must load.
-- Locale factoring is a safe payload-reduction pattern when the shared locale entry remains the public access point.
-- The same mechanism can apply across repositories when the code shape matches the evidence.
+- These changes all serve the same payload-reduction mechanism: reduce the entry bundle by narrowing the import/export surface so bundlers can exclude unused code.
+- The strategy is appropriate when the shipped path can be expressed with explicit imports or registrations and when the dependency/package structure supports tree shaking.
 
-## Confidence
-
-**Medium**, based on three observations across three repositories with consistent improvement direction and no regressions in the supplied evidence.
+### Confidence
+High. The supplied evidence includes documentation, code patches, and multiple independent repositories showing the same mechanism.
 
 ## Risks and limitations
 
-- Removing code from the shipped entry bundle can break behavior if the code is still required indirectly.
-- Splitting locale or feature data can introduce import-path mistakes if the shared re-export is not updated consistently.
-- The evidence supports removal and factoring patterns, not a universal rule for all unused-looking code.
-- The exact bundle-size improvement is repository- and build-dependent; verify with measurement rather than assuming a fixed percentage.
+- Importing a full component map or root package entrypoint can intentionally pull more code into the bundle; that is acceptable only when the full surface is required.
+- Some packages may not expose narrower entrypoints for every symbol; in that case, this strategy should not be forced without evidence.
+- Deleting exports can break consumers if the symbol is part of a public API; only remove exports when the evidence shows they are unused or intentionally replaced.
+- Patched package entrypoints may require maintenance when upstream adds new components or changes internal structure.
+- This strategy reduces shipped payload, but it is not a substitute for lazy loading when the code is genuinely non-initial and can be deferred.

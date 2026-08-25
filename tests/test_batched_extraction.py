@@ -77,3 +77,49 @@ def test_unknown_parent_is_kept_in_provisional_proposal_pool() -> None:
     assert pattern is not None
     assert pattern.parent_strategy == "unclassified"
     assert pattern.proposed_parent_strategy == "edge delivery architecture"
+
+
+def _flagged_record(index: int) -> PRRecord:
+    return PRRecord(
+        id=f"org/repo-{index}#{index}", repo=f"org/repo-{index}", pr_number=index,
+        signal_type="perf_flagged", metric_key=None, before=None, after=None, delta=None,
+        title=f"Speed up route {index}",
+        changed_files=[{"filename": "app.js", "patch": "+ import('./secondary')"}],
+        human_signal_text="nice, this drops LCP a lot",
+    )
+
+
+def test_perf_flagged_uses_inferred_signal_type_when_valid() -> None:
+    extracted = _response_for_prompt(
+        "", "ignored\n" + __import__("json").dumps([{"source_id": "org/repo-1#1"}]),
+    )["results"][0]
+    extracted["inferred_signal_type"] = "perf_improvement"
+
+    pattern = _to_pattern(_flagged_record(1), extracted)
+    assert pattern is not None
+    assert pattern.signal_type == "perf_improvement"
+
+
+def test_perf_flagged_is_dropped_without_a_valid_inferred_signal_type() -> None:
+    base = _response_for_prompt(
+        "", "ignored\n" + __import__("json").dumps([{"source_id": "org/repo-1#1"}]),
+    )["results"][0]
+
+    missing = dict(base)  # inferred_signal_type absent entirely
+    assert _to_pattern(_flagged_record(1), missing) is None
+
+    invalid = dict(base, inferred_signal_type="neutral")
+    assert _to_pattern(_flagged_record(1), invalid) is None
+
+
+def test_non_flagged_records_ignore_inferred_signal_type() -> None:
+    """A perf_improvement/perf_decrease record's own signal_type is already
+    trusted -- inferred_signal_type is only ever read for perf_flagged."""
+    extracted = _response_for_prompt(
+        "", "ignored\n" + __import__("json").dumps([{"source_id": "org/repo-1#1"}]),
+    )["results"][0]
+    extracted["inferred_signal_type"] = "perf_decrease"  # deliberately contradicts the record
+
+    pattern = _to_pattern(_record(1), extracted)
+    assert pattern is not None
+    assert pattern.signal_type == "perf_improvement"

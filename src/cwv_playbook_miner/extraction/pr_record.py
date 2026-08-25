@@ -26,7 +26,7 @@ class PRRecord:
     id: str  # "{repo}#{pr_number}"
     repo: str
     pr_number: int
-    signal_type: str  # perf_improvement | perf_decrease
+    signal_type: str  # perf_improvement | perf_decrease | perf_flagged
     metric_key: str | None
     before: float | None
     after: float | None
@@ -36,6 +36,13 @@ class PRRecord:
     changed_files: list[dict] = field(default_factory=list)  # [{filename, patch}]
     template_names: list[str] = field(default_factory=list)
     source: str = "gharchive_live"
+    # Only set for signal_type == "perf_flagged": the review/review-comment
+    # body that triggered discovery (no structured bot template matched it,
+    # so metric_key/before/after/delta stay None -- extraction infers
+    # relevance and direction from this text plus the diff. See
+    # gharchive_mine.human_flagged_candidates and
+    # pattern_extract.py's inferred_signal_type.
+    human_signal_text: str | None = None
 
 
 def write_jsonl(records: list[PRRecord], path: Path) -> None:
