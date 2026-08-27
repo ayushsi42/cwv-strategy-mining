@@ -41,7 +41,8 @@ mentioned performance in plain text, with no bot-parsed number required.
 | `source/` | `perf_improvement.jsonl`, `perf_decrease.jsonl`, `perf_flagged.jsonl` | Raw mined PR records — repo, PR number, signal type, bot-parsed metric (when available), title, body, diff patches, and every issue comment/review/inline review comment backfilled via GitHub GraphQL |
 | `patterns/` | `extractions.jsonl` | Per-PR technique extraction: `technique`, `mechanism`, `affected_resource`, `render_phase`, `description`, inferred `direction` (for human-flagged PRs) — only for PRs that passed the CWV-relevance gate |
 | `aggregation/` | `routing.jsonl`, `novel_clusters.jsonl`, `enrichments.jsonl`, `playbook_facts.jsonl` | Routing decisions (existing playbook match vs. novel), coherence-verified novel-technique clusters, diversity-weighted existing-playbook evidence, and the same fact-shape extracted from the 20 curated playbooks |
-| `playbooks/` | 26 `.md` files | Final generated candidates — 9 new playbooks (full `{issue_type}.md`) + 17 `.enrichment.md` blocks for existing playbooks, each a draft → critic → grounding-checked document grounded in real cited PRs |
+| `playbooks/new_playbooks/` | 9 `.md` files | Full new `{issue_type}.md` candidates — front matter includes `source_prs`, draft → critic → grounding-checked |
+| `playbooks/enriched/` | 17 `.enrichment.md` files | New approach/anti-pattern subsection(s) for an existing playbook — no front matter (spliced body content), grounding noted via a `> **Source PRs**` line instead |
 
 ### `source/*.jsonl` schema
 

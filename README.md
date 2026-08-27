@@ -170,7 +170,9 @@ src/cwv_playbook_miner/
   llm/            shared LLM client (openai / openai-compatible / claude-cli backends,
                   with retry-with-backoff on transient failures)
 data/processed/  every stage's JSONL output (gitignored)
-playbooks/       generated playbook candidates -- new files + *.enrichment.md blocks
+playbooks/
+  new_playbooks/  full new {issue_type}.md candidates -- front matter includes source_prs
+  enriched/       new approach/anti-pattern *.enrichment.md blocks for existing playbooks
 cwv-playbooks-handoff/  the 20 curated playbooks generation reads from; never written to
 docs/pipeline-flow.svg   the diagram above
 docs/hf-dataset-card.md  source of truth for the HF dataset's README (pushed manually)
