@@ -25,6 +25,8 @@ a short phrase, never a bare similarity threshold. See the repo's
 `SESSION_NOTES.md` for the full chronological design log: what was found,
 why each fix was made, and what it was verified against.
 
+![pipeline flow](docs/pipeline-flow.svg)
+
 ## Why
 
 Automated Lighthouse/bundle-size bots are the obvious place to find
