@@ -1,63 +1,71 @@
-"""CLI entrypoint. Subcommands mirror the pipeline stages 0-6 from the plan;
-`run-all` chains them with sensible default paths under `data/`. Every
-subcommand reads/writes JSONL so intermediate output stays inspectable
-(`cat data/processed/.../*.jsonl | jq`), same "each stage is a standalone,
-debuggable step" philosophy as smol-planner's own dataset scripts.
+"""CLI entrypoint for cwv-playbook-miner.
+
+Two command groups:
+
+  Sourcing (GH Archive → raw PR records):
+    source      — live scan a time window
+    backfill    — resumable chunked multi-day scan
+
+  AEM playbook pipeline (raw records → AEM-format playbooks):
+    triage           — stage 1: summarise + embed + route
+    semantic-cluster — stage 2b: HDBSCAN novel clustering
+    enrich-extract   — stage 2a: evidence selection for existing playbooks
+    generate-playbooks — stage 3: AEM-format generation (two-pass)
+    playbooks        — full chain: all four stages above
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from cwv_playbook_miner.antipatterns.pull_antipatterns import pull_antipatterns
-from cwv_playbook_miner.antipatterns import pull_antipatterns as antipatterns_mod
-from cwv_playbook_miner.classification.classify_cluster import Classification, classify_clusters
-from cwv_playbook_miner.classification import classify_cluster as classify_mod
-from cwv_playbook_miner.aggregation.statistical import (
-    aggregate_patterns,
-    read_aggregates,
-    resolve_substrategy_matches,
-    to_technique_cluster,
-    write_aggregates,
-)
-from cwv_playbook_miner.extraction import cluster as cluster_mod
-from cwv_playbook_miner.extraction import pattern_extract
-from cwv_playbook_miner.extraction.external_corpus import load_golden_perf_improvement
 from cwv_playbook_miner.extraction.pr_record import PRRecord, read_jsonl as read_pr_jsonl, write_jsonl as write_pr_jsonl
-from cwv_playbook_miner.taxonomy import write_parent_proposals
-from cwv_playbook_miner.generation.render_candidate import render_candidate, write_candidate
+from cwv_playbook_miner.labeling.signal_label import label_scan_result
 from cwv_playbook_miner.llm.client import resolve_default_backend
 from cwv_playbook_miner.sourcing.gharchive_fetch import read_cursor, write_cursor
 from cwv_playbook_miner.sourcing.gharchive_mine import (
-    check_pr_merged, fetch_pr_comments, fetch_pr_diff, human_flagged_candidates, is_ci_docs_only,
-    scan_range, touches_frontend,
+    check_pr_merged, fetch_pr_comments, fetch_pr_diff,
+    human_flagged_candidates, is_ci_docs_only, scan_range, touches_frontend,
 )
-from cwv_playbook_miner.labeling.signal_label import label_scan_result
 
 DATA_RAW = Path("data/raw")
 DATA_PROCESSED = Path("data/processed")
 CURSOR_PATH = DATA_RAW / "gharchive_cursor.json"
-CANDIDATES_DIR = Path("candidates")
+HANDOFF_DIR = Path("cwv-playbooks-handoff")
+PLAYBOOKS_DIR = Path("playbooks")
+CACHE_DIR = DATA_PROCESSED / ".triage_cache"
 
 
 def _add_llm_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--backend", default=None, help="openai (default, requires OPENAI_API_KEY) | claude-cli | openai-compatible")
+    p.add_argument("--backend", default=None,
+                   help="openai | openai-compatible (default: openai, requires OPENAI_API_KEY)")
     p.add_argument("--model", default=None)
     p.add_argument("--timeout", type=int, default=120)
 
+
+def _add_embed_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--embed-provider", default="openai",
+                   help="openai | openai-compatible | sentence-transformers")
+    p.add_argument("--embed-model", default=None, help="override default embedding model")
+    p.add_argument("--embed-base-url", default=None,
+                   help="base URL for openai-compatible embedding endpoint")
+
+
+# ---------------------------------------------------------------------------
+# Sourcing commands
+# ---------------------------------------------------------------------------
 
 def _resolve_start(args: argparse.Namespace) -> datetime:
     if args.start:
         return datetime.fromisoformat(args.start)
     if not args.use_cursor:
-        raise SystemExit("--start is required unless --use-cursor is set and a cursor file already exists")
+        raise SystemExit("--start is required unless --use-cursor is set")
     cursor = read_cursor(CURSOR_PATH)
     if cursor is None:
-        raise SystemExit(f"--use-cursor set but no cursor file yet at {CURSOR_PATH} -- pass --start for the first run")
-    return cursor + timedelta(hours=1)  # resume just past the last fully-scanned hour
+        raise SystemExit(f"--use-cursor set but no cursor file at {CURSOR_PATH} — pass --start")
+    return cursor + timedelta(hours=1)
 
 
 def cmd_source(args: argparse.Namespace) -> None:
@@ -70,52 +78,43 @@ def cmd_source(args: argparse.Namespace) -> None:
     def progress(dt, result):
         if result.hours_scanned % 5 == 0:
             print(f"  ...{result.hours_scanned} hours scanned, "
-                  f"{len(result.comment_hits)} comment hits, {len(result.merged_prs)} merges seen so far")
+                  f"{len(result.comment_hits)} comment hits, "
+                  f"{len(result.merged_prs)} merges seen so far")
 
-    # Persisting a cursor before this command writes its records can lose data
-    # after interruption. The bounded backfill command checkpoints only after
-    # each completed chunk instead.
     result = scan_range(
         start, end, on_progress=progress,
         track_merges=not getattr(args, "comment_only", False),
         workers=getattr(args, "workers", 1),
     )
-    print(f"Scan done: {result.hours_scanned} hours scanned ({result.hours_skipped} skipped/unpublished), "
-          f"{len(result.comment_hits)} bot-comment hits, {len(result.merged_prs)} merged PRs seen, "
-          f"{len(result.free_candidates)} candidates clear BOTH free filters in-window.")
+    print(f"Scan done: {result.hours_scanned} hours scanned "
+          f"({result.hours_skipped} skipped/unpublished), "
+          f"{len(result.comment_hits)} bot-comment hits, "
+          f"{len(result.merged_prs)} merged PRs seen, "
+          f"{len(result.free_candidates)} candidates clear both free filters.")
 
     labeled = label_scan_result(result.comment_hits)
     labeled_by_pr = {(pr.repo, pr.pr_number): pr for pr in labeled}
     tier_a = [pr for pr in labeled if pr.tier == "A"]
     print(f"  structural fingerprinting: {len(labeled)} broad PR hit(s) -> {len(tier_a)} Tier-A PR(s)")
 
-    # A single Tier-A comment in-window is promising but not enough for a
-    # delta. Pull full history only for structurally verified reports, before
-    # spending merge-status calls on broad keyword hits.
     unresolved = [lp for lp in tier_a if lp.signal_type == "unlabeled"]
 
     def resolve_full_history(lp):
-        repo, pr_number = lp.repo, lp.pr_number
-        full_comments = fetch_pr_comments(repo, pr_number)
+        full_comments = fetch_pr_comments(lp.repo, lp.pr_number)
         if len(full_comments) <= lp.n_comments_seen:
             return lp
         from cwv_playbook_miner.labeling.signal_label import label_pr
-        return label_pr(repo, pr_number, full_comments)
+        return label_pr(lp.repo, lp.pr_number, full_comments)
 
     if unresolved:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        print(
-            f"  resolving full comment history for {len(unresolved)} Tier-A PR(s) "
-            f"with {getattr(args, 'api_workers', 1)} worker(s)..."
-        )
+        print(f"  resolving full comment history for {len(unresolved)} Tier-A PR(s) "
+              f"with {getattr(args, 'api_workers', 1)} worker(s)...")
         with ThreadPoolExecutor(max_workers=getattr(args, "api_workers", 1)) as pool:
             futures = {pool.submit(resolve_full_history, lp): lp for lp in unresolved}
             for future in as_completed(futures):
                 original = futures[future]
                 relabeled = future.result()
-                repo, pr_number = original.repo, original.pr_number
-                labeled_by_pr[(repo, pr_number)] = relabeled
+                labeled_by_pr[(original.repo, original.pr_number)] = relabeled
                 if relabeled.signal_type != "unlabeled":
                     print(f"    resolved: {relabeled.signal_type} ({relabeled.metric_key} "
                           f"{relabeled.before} -> {relabeled.after}, delta={relabeled.delta})")
@@ -135,10 +134,8 @@ def cmd_source(args: argparse.Namespace) -> None:
             fallback_confirmed.append((repo, pr_number))
             merged_at_by_pr[(repo, pr_number)] = merged_at
     candidates = sorted(in_window_merged | set(fallback_confirmed))
-    print(
-        f"  {len(measurable)} measurable PR(s), {len(candidates)} confirmed merged "
-        f"({len(fallback_confirmed)} via fallback check)"
-    )
+    print(f"  {len(measurable)} measurable PR(s), {len(candidates)} confirmed merged "
+          f"({len(fallback_confirmed)} via fallback check)")
 
     perf_improvement: list[PRRecord] = []
     perf_decrease: list[PRRecord] = []
@@ -158,20 +155,14 @@ def cmd_source(args: argparse.Namespace) -> None:
             print("    skipped (no frontend files touched)")
             continue
         record = PRRecord(
-            id=f"{repo}#{pr_number}", repo=repo, pr_number=pr_number, signal_type=lp.signal_type,
-            metric_key=lp.metric_key, before=lp.before, after=lp.after, delta=lp.delta,
+            id=f"{repo}#{pr_number}", repo=repo, pr_number=pr_number,
+            signal_type=lp.signal_type, metric_key=lp.metric_key,
+            before=lp.before, after=lp.after, delta=lp.delta,
             changed_files=changed_files, template_names=lp.template_names,
             merged_at=merged_at_by_pr.get((repo, pr_number)),
         )
         (perf_improvement if lp.signal_type == "perf_improvement" else perf_decrease).append(record)
 
-    # Human-flagged (non-bot review / inline review comment) candidates: no
-    # structured bot template ever matches prose (registry.py's
-    # generic_fallback always returns tier B, no parsed delta), so these
-    # never reach `measurable` above -- they're a separate, unquantified
-    # discovery signal. Extraction (stage 2) infers relevance and direction
-    # from the diff + the flagging comment's text; see
-    # pattern_extract.py's inferred_signal_type.
     flagged = human_flagged_candidates(result.comment_hits) - measurable
     flagged_in_window = flagged & set(result.merged_prs)
     for key in flagged_in_window:
@@ -184,13 +175,12 @@ def cmd_source(args: argparse.Namespace) -> None:
             merged_at_by_pr.setdefault((repo, pr_number), merged_at)
     flagged_merged = sorted(flagged_in_window | set(flagged_fallback_confirmed))
     if flagged:
-        print(
-            f"  {len(flagged)} human-flagged PR(s) (non-bot review/review-comment), "
-            f"{len(flagged_merged)} confirmed merged"
-        )
+        print(f"  {len(flagged)} human-flagged PR(s) (non-bot review/review-comment), "
+              f"{len(flagged_merged)} confirmed merged")
 
     hit_by_flagged_pr = {
-        (h.repo, h.pr_number): h for h in result.comment_hits if h.source in ("review", "review_comment")
+        (h.repo, h.pr_number): h for h in result.comment_hits
+        if h.source in ("review", "review_comment")
     }
     perf_flagged: list[PRRecord] = []
     for repo, pr_number in flagged_merged:
@@ -207,8 +197,8 @@ def cmd_source(args: argparse.Namespace) -> None:
             continue
         hit = hit_by_flagged_pr.get((repo, pr_number))
         perf_flagged.append(PRRecord(
-            id=f"{repo}#{pr_number}", repo=repo, pr_number=pr_number, signal_type="perf_flagged",
-            metric_key=None, before=None, after=None, delta=None,
+            id=f"{repo}#{pr_number}", repo=repo, pr_number=pr_number,
+            signal_type="perf_flagged", metric_key=None, before=None, after=None, delta=None,
             changed_files=changed_files, human_signal_text=hit.body if hit else None,
             merged_at=merged_at_by_pr.get((repo, pr_number)),
         ))
@@ -221,13 +211,14 @@ def cmd_source(args: argparse.Namespace) -> None:
         ):
             path = DATA_PROCESSED / filename
             existing = read_pr_jsonl(path) if path.exists() and path.stat().st_size else []
-            by_id = {record.id: record for record in existing}
-            by_id.update({record.id: record for record in records})
+            by_id = {r.id: r for r in existing}
+            by_id.update({r.id: r for r in records})
             write_pr_jsonl(list(by_id.values()), path)
     else:
         write_pr_jsonl(perf_improvement, DATA_PROCESSED / "perf_improvement.jsonl")
         write_pr_jsonl(perf_decrease, DATA_PROCESSED / "perf_decrease.jsonl")
         write_pr_jsonl(perf_flagged, DATA_PROCESSED / "perf_flagged.jsonl")
+
     print(f"Wrote {len(perf_improvement)} perf_improvement + {len(perf_decrease)} perf_decrease + "
           f"{len(perf_flagged)} perf_flagged records to {DATA_PROCESSED}/")
     if getattr(args, "use_cursor", False):
@@ -235,7 +226,7 @@ def cmd_source(args: argparse.Namespace) -> None:
 
 
 def cmd_backfill(args: argparse.Namespace) -> None:
-    """Run a long GH Archive sweep in durable, bounded chunks."""
+    """Resumable chunked GH Archive sweep."""
     if args.start:
         start = datetime.fromisoformat(args.start)
     else:
@@ -251,9 +242,9 @@ def cmd_backfill(args: argparse.Namespace) -> None:
         chunk_number += 1
         print(f"\n=== backfill chunk {chunk_number}: {current.isoformat()} -> {chunk_end.isoformat()} ===")
         chunk_args = argparse.Namespace(
-            start=current.isoformat(), end=chunk_end.isoformat(), hours=args.chunk_hours,
-            use_cursor=False, append=True, comment_only=True,
-            workers=args.workers, api_workers=args.api_workers,
+            start=current.isoformat(), end=chunk_end.isoformat(),
+            hours=args.chunk_hours, use_cursor=False, append=True,
+            comment_only=True, workers=args.workers, api_workers=args.api_workers,
         )
         cmd_source(chunk_args)
         write_cursor(CURSOR_PATH, chunk_end - timedelta(hours=1))
@@ -262,347 +253,21 @@ def cmd_backfill(args: argparse.Namespace) -> None:
     print(f"Backfill complete through {end.isoformat()}")
 
 
-def cmd_import_external(args: argparse.Namespace) -> None:
-    print(f"Loading external corpus (min_perf_delta={args.min_delta}, limit={args.limit})...")
-    external = load_golden_perf_improvement(min_perf_delta=args.min_delta, limit=args.limit)
-    print(f"  {len(external)} real perf_improvement record(s) from Ayush-Singh/cwv-planner-dataset-v1")
-
-    path = DATA_PROCESSED / "perf_improvement.jsonl"
-    existing = read_pr_jsonl(path) if path.exists() and path.stat().st_size > 0 else []
-    existing_ids = {r.id for r in existing}
-    merged = existing + [r for r in external if r.id not in existing_ids]
-    write_pr_jsonl(merged, path)
-    print(f"Wrote {len(merged)} total perf_improvement record(s) ({len(existing)} live-mined + "
-          f"{len(merged) - len(existing)} new external) -> {path}")
-
-
-def cmd_extract(args: argparse.Namespace) -> None:
-    backend = args.backend or resolve_default_backend()
-    input_path = DATA_PROCESSED / f"{args.signal_type}.jsonl"
-    records = read_pr_jsonl(input_path)
-    print(f"Extracting patterns from {len(records)} {args.signal_type} record(s) via backend={backend} "
-          f"(batch_size={args.batch_size}, concurrency={args.concurrency})...")
-    patterns = pattern_extract.extract_patterns(
-        records, backend, args.model, args.timeout, args.concurrency, args.batch_size,
-    )
-    out_path = DATA_PROCESSED / f"{args.signal_type}.patterns.jsonl"
-    pattern_extract.write_jsonl(patterns, out_path)
-    print(f"Wrote {len(patterns)} extracted patterns -> {out_path}")
-
-
-def cmd_cluster(args: argparse.Namespace) -> None:
-    improvement_patterns = pattern_extract.read_jsonl(DATA_PROCESSED / "perf_improvement.patterns.jsonl")
-    decrease_path = DATA_PROCESSED / "perf_decrease.patterns.jsonl"
-    decrease_patterns = pattern_extract.read_jsonl(decrease_path) if decrease_path.exists() else []
-    flagged_path = DATA_PROCESSED / "perf_flagged.patterns.jsonl"
-    flagged_patterns = pattern_extract.read_jsonl(flagged_path) if flagged_path.exists() else []
-    patterns = improvement_patterns + decrease_patterns + flagged_patterns
-    aggregate_path = DATA_PROCESSED / "technique_aggregates.jsonl"
-    prior = [] if getattr(args, "rebuild_registry", False) else read_aggregates(aggregate_path)
-    if getattr(args, "rebuild_registry", False):
-        print("  rebuilding child registry from extracted observations (prior aliases ignored)")
-    if not args.no_llm_merge:
-        backend = args.backend or resolve_default_backend()
-        resolve_substrategy_matches(patterns, prior, backend, args.model, args.timeout)
-    proposal_count = write_parent_proposals(
-        patterns, DATA_PROCESSED / "taxonomy_proposals.jsonl",
-    )
-    aggregates = aggregate_patterns(
-        patterns, prior=prior,
-        auto_merge_threshold=args.auto_merge_threshold,
-        borderline_threshold=args.borderline_threshold,
-        min_observations=args.min_observations,
-        min_repos=args.min_repos,
-        min_consistency=args.min_consistency,
-    )
-    write_aggregates(aggregates, aggregate_path)
-    clusters = [cluster for item in aggregates if (cluster := to_technique_cluster(item))]
-    out_path = DATA_PROCESSED / "clusters.jsonl"
-    cluster_mod.write_jsonl(clusters, out_path)
-    print(
-        f"Aggregated {len(patterns)} patterns into {len(aggregates)} canonical technique(s); "
-        f"{len(clusters)} meet evidence thresholds; {proposal_count} parent proposal(s) await review -> {out_path}"
-    )
-    for c in clusters:
-        print(
-            f"  - {c.technique!r} (observations={c.frequency}, repos={c.distinct_repo_count}, "
-            f"consistency={c.directional_consistency:.0%}, confidence={c.confidence})"
-        )
-
-
-def cmd_classify(args: argparse.Namespace) -> None:
-    backend = args.backend or resolve_default_backend()
-    clusters = cluster_mod.read_jsonl(DATA_PROCESSED / "clusters.jsonl")
-    print(f"Classifying {len(clusters)} cluster(s) for generic CWV usefulness via backend={backend}...")
-    classifications = classify_clusters(clusters, backend, args.model, args.timeout)
-    out_path = DATA_PROCESSED / "classifications.jsonl"
-    classify_mod.write_jsonl(classifications, out_path)
-    n_survive = sum(1 for c in classifications if c.survives)
-    print(f"Wrote {len(classifications)} classification(s) -> {out_path} ({n_survive} survive to generation)")
-
-
-def cmd_antipatterns(args: argparse.Namespace) -> None:
-    classifications = [Classification(**json.loads(line)) for line in
-                        (DATA_PROCESSED / "classifications.jsonl").open(encoding="utf-8")]
-    clusters = {c.normalized_key: c for c in cluster_mod.read_jsonl(DATA_PROCESSED / "clusters.jsonl")}
-    decrease_patterns = pattern_extract.read_jsonl(DATA_PROCESSED / "perf_decrease.patterns.jsonl")
-
-    all_matches = []
-    for c in classifications:
-        if not c.survives:
-            continue
-        cluster = clusters[c.normalized_key]
-        matches = pull_antipatterns(c.normalized_key, cluster.applicable_signals, decrease_patterns)
-        all_matches.extend(matches)
-        print(f"  {c.technique!r} ({c.target_issue_type}): {len(matches)} anti-pattern match(es)")
-
-    out_path = DATA_PROCESSED / "antipatterns.jsonl"
-    antipatterns_mod.write_jsonl(all_matches, out_path)
-    print(f"Wrote {len(all_matches)} anti-pattern match(es) -> {out_path}")
-
-
-def cmd_generate(args: argparse.Namespace) -> None:
-    backend = args.backend or resolve_default_backend()
-    args.candidates_dir.mkdir(parents=True, exist_ok=True)
-    for stale_path in args.candidates_dir.glob("*.md"):
-        if stale_path.name != "README.md":
-            stale_path.unlink()
-    clusters = {c.normalized_key: c for c in cluster_mod.read_jsonl(DATA_PROCESSED / "clusters.jsonl")}
-    classifications = [Classification(**json.loads(line)) for line in
-                        (DATA_PROCESSED / "classifications.jsonl").open(encoding="utf-8")]
-    all_antipatterns = list(antipatterns_mod.AntiPatternMatch(**json.loads(line)) for line in
-                             (DATA_PROCESSED / "antipatterns.jsonl").open(encoding="utf-8")) \
-        if (DATA_PROCESSED / "antipatterns.jsonl").exists() else []
-    # A representative_improvements source_id can now live in either file --
-    # a perf_flagged-origin PR's raw record (with the diff) only exists in
-    # perf_flagged.jsonl, since it never had a bot-parsed delta to land in
-    # perf_improvement.jsonl.
-    flagged_source_path = DATA_PROCESSED / "perf_flagged.jsonl"
-    source_records = {
-        record.id: record
-        for record in (
-            read_pr_jsonl(DATA_PROCESSED / "perf_improvement.jsonl")
-            + (read_pr_jsonl(flagged_source_path) if flagged_source_path.exists() else [])
-        )
-    }
-
-    survivors = [c for c in classifications if c.survives]
-
-    # Two+ clusters can independently classify to the SAME target_issue_type
-    # (e.g. both "Fisher-Yates shuffle" and "regex hot-path" enrich
-    # js-execution) -- confirmed live this silently overwrote the first
-    # file with the second when generated one-at-a-time. Group and merge
-    # before rendering so one candidate file gets grounded in all of them.
-    by_issue_type: dict[str, list[Classification]] = {}
-    for c in survivors:
-        by_issue_type.setdefault(c.target_issue_type, []).append(c)
-
-    print(f"Generating {len(by_issue_type)} platform-neutral candidate target(s) "
-          f"from {len(survivors)} surviving cluster(s) via backend={backend}...")
-    for issue_type, group in by_issue_type.items():
-        c = group[0]
-        cluster = clusters[c.normalized_key]
-        if len(group) > 1:
-            others = [clusters[g.normalized_key] for g in group[1:]]
-            print(f"  merging {len(group)} clusters into {issue_type}.md: "
-                  f"{[g.technique for g in group]}")
-            cluster = cluster_mod.merge_clusters([cluster, *others])
-        matches = [m for m in all_antipatterns if m.cluster_key in {g.normalized_key for g in group}]
-        records = [source_records[source_id] for source_id in cluster.source_pr_ids if source_id in source_records]
-        if not records:
-            print(f"  skipping {issue_type}.md: no source PR records found for {cluster.source_pr_ids}")
-            continue
-        print(f"  rendering {issue_type}.md (technique={cluster.technique!r}, {len(matches)} anti-pattern refs)...")
-        try:
-            text = render_candidate(cluster, c, matches, records, backend, args.model, args.timeout)
-        except Exception as exc:  # noqa: BLE001 -- one candidate's LLM failure shouldn't sink the rest of the batch
-            print(f"    FAILED: {exc}")
-            continue
-        path = write_candidate(text, c.target_issue_type, args.candidates_dir)
-        print(f"    OK -> {path} (draft + technical critic complete)")
-
-
-def cmd_run_all(args: argparse.Namespace) -> None:
-    cmd_source(args)
-    signal_types = ("perf_improvement", "perf_decrease", "perf_flagged")
-    if not any((DATA_PROCESSED / f"{t}.jsonl").exists() and (DATA_PROCESSED / f"{t}.jsonl").stat().st_size
-               for t in signal_types):
-        print("No perf_improvement/perf_decrease/perf_flagged records found in this window -- "
-              "nothing to extract. Try a wider --hours or different --start.")
-        return
-    for signal_type in signal_types:
-        path = DATA_PROCESSED / f"{signal_type}.jsonl"
-        if path.exists() and path.stat().st_size > 0:
-            args.signal_type = signal_type
-            cmd_extract(args)
-        else:
-            pattern_extract.write_jsonl([], DATA_PROCESSED / f"{signal_type}.patterns.jsonl")
-    cmd_cluster(args)
-    cmd_classify(args)
-    cmd_antipatterns(args)
-    cmd_generate(args)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="cwv-playbook-miner")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    p = sub.add_parser("source", help="stage 0+1: scan GH Archive, label, fetch diffs for survivors")
-    p.add_argument("--start", default=None, help="ISO datetime, e.g. 2026-08-10T13:00:00 (omit if --use-cursor and a cursor file already exists)")
-    p.add_argument("--end", default=None, help="ISO datetime (default: --start + --hours)")
-    p.add_argument("--hours", type=int, default=6)
-    p.add_argument("--use-cursor", action="store_true", help="resume from/advance the watermark cursor file")
-    p.add_argument("--append", action="store_true", help="deduplicate into existing source JSONL instead of replacing it")
-    p.add_argument("--comment-only", action="store_true", help="skip retaining merge events and confirm sparse comment hits through GitHub API")
-    p.add_argument("--workers", type=int, default=1, help="parallel hourly archive download/parser workers")
-    p.add_argument("--api-workers", type=int, default=1, help="parallel full-comment-history workers")
-    p.set_defaults(func=cmd_source)
-
-    p = sub.add_parser("backfill", help="resumable, chunked GH Archive backfill")
-    p.add_argument("--start", default=None, help="first run start; later runs may resume from the saved cursor")
-    p.add_argument("--end", required=True, help="exclusive ISO end datetime")
-    p.add_argument("--chunk-hours", type=int, default=24)
-    p.add_argument("--workers", type=int, default=4)
-    p.add_argument("--api-workers", type=int, default=2)
-    p.set_defaults(func=cmd_backfill)
-
-    p = sub.add_parser("import-external", help="pull real perf_improvement PRs from the external cwv-planner-dataset-v1 corpus")
-    p.add_argument("--min-delta", type=float, default=15.0)
-    p.add_argument("--limit", type=int, default=25)
-    p.set_defaults(func=cmd_import_external)
-
-    p = sub.add_parser("extract", help="stage 2: LLM pattern extraction")
-    p.add_argument("--signal-type", default="perf_improvement",
-                    choices=["perf_improvement", "perf_decrease", "perf_flagged"])
-    p.add_argument("--concurrency", type=int, default=4, help="parallel LLM batches")
-    p.add_argument("--batch-size", type=int, default=8, help="compact PR records per LLM call")
-    _add_llm_args(p)
-    p.set_defaults(func=cmd_extract)
-
-    p = sub.add_parser("cluster", help="stage 3: canonical statistical technique aggregation")
-    p.add_argument("--min-observations", type=int, default=3)
-    p.add_argument("--min-repos", type=int, default=2)
-    p.add_argument("--min-consistency", type=float, default=0.7)
-    p.add_argument("--auto-merge-threshold", type=float, default=0.78)
-    p.add_argument("--borderline-threshold", type=float, default=0.35)
-    p.add_argument("--no-llm-merge", action="store_true")
-    p.add_argument("--rebuild-registry", action="store_true", help="rebuild child aliases from extracted observations instead of prior registry")
-    _add_llm_args(p)
-    p.set_defaults(func=cmd_cluster)
-
-    p = sub.add_parser("classify", help="stage 4: generic CWV usefulness and evidence judge")
-    _add_llm_args(p)
-    p.set_defaults(func=cmd_classify)
-
-    p = sub.add_parser("antipatterns", help="stage 5: pull matching perf_decrease anti-patterns")
-    p.set_defaults(func=cmd_antipatterns)
-
-    p = sub.add_parser("generate", help="stage 6: render candidate .md files")
-    p.add_argument("--candidates-dir", type=Path, default=CANDIDATES_DIR)
-    _add_llm_args(p)
-    p.set_defaults(func=cmd_generate)
-
-    p = sub.add_parser("run-all", help="chain source -> extract -> cluster -> classify -> antipatterns -> generate")
-    p.add_argument("--start", default=None)
-    p.add_argument("--end", default=None)
-    p.add_argument("--hours", type=int, default=6)
-    p.add_argument("--use-cursor", action="store_true")
-    p.add_argument("--candidates-dir", type=Path, default=CANDIDATES_DIR)
-    p.add_argument("--concurrency", type=int, default=4, help="parallel LLM batches")
-    p.add_argument("--batch-size", type=int, default=8, help="compact PR records per LLM call")
-    p.add_argument("--min-observations", type=int, default=3)
-    p.add_argument("--min-repos", type=int, default=2)
-    p.add_argument("--min-consistency", type=float, default=0.7)
-    p.add_argument("--auto-merge-threshold", type=float, default=0.78)
-    p.add_argument("--borderline-threshold", type=float, default=0.35)
-    p.add_argument("--no-llm-merge", action="store_true")
-    p.add_argument("--rebuild-registry", action="store_true", help="rebuild child aliases from extracted observations instead of prior registry")
-    _add_llm_args(p)
-    p.set_defaults(func=cmd_run_all)
-
-    # -----------------------------------------------------------------------
-    # AEM-playbook pipeline (triage → cluster/enrich → generate-playbooks)
-    # -----------------------------------------------------------------------
-    _HANDOFF_HELP = "path to cwv-playbooks-handoff dir (default: cwv-playbooks-handoff)"
-    _OUTPUT_HELP = "output dir for generated playbooks (default: playbooks/)"
-
-    p = sub.add_parser("triage", help="[AEM] stage 1: summarise records, embed, route against existing playbooks")
-    p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF_HELP)
-    p.add_argument("--high-threshold", type=float, default=0.78, help="cosine sim → existing playbook")
-    p.add_argument("--low-threshold", type=float, default=0.45, help="cosine sim → novel pool")
-    p.add_argument("--workers", type=int, default=8, help="parallel summarisation workers")
-    p.add_argument("--no-cache", action="store_true", help="ignore cached summaries")
-    _add_llm_args(p)
-    _add_embed_args(p)
-    p.set_defaults(func=cmd_triage)
-
-    p = sub.add_parser("semantic-cluster", help="[AEM] stage 2b: HDBSCAN clustering of novel pool")
-    p.add_argument("--min-cluster-size", type=int, default=4)
-    _add_llm_args(p)
-    _add_embed_args(p)
-    p.set_defaults(func=cmd_semantic_cluster)
-
-    p = sub.add_parser("enrich-extract", help="[AEM] stage 2a: extract enrichment evidence for existing playbooks")
-    p.set_defaults(func=cmd_enrich_extract)
-
-    p = sub.add_parser("generate-playbooks", help="[AEM] stage 3: generate new .md files and enrichment blocks")
-    p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF_HELP)
-    p.add_argument("--output-dir", default=str(PLAYBOOKS_DIR), help=_OUTPUT_HELP)
-    p.add_argument("--new-only", action="store_true", help="skip enrichment blocks, generate new playbooks only")
-    _add_llm_args(p)
-    p.set_defaults(func=cmd_generate_playbooks)
-
-    p = sub.add_parser("playbooks", help="[AEM] full chain: triage → semantic-cluster + enrich-extract → generate-playbooks")
-    p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF_HELP)
-    p.add_argument("--output-dir", default=str(PLAYBOOKS_DIR), help=_OUTPUT_HELP)
-    p.add_argument("--high-threshold", type=float, default=0.78)
-    p.add_argument("--low-threshold", type=float, default=0.45)
-    p.add_argument("--min-cluster-size", type=int, default=4)
-    p.add_argument("--workers", type=int, default=8)
-    p.add_argument("--no-cache", action="store_true")
-    p.add_argument("--new-only", action="store_true")
-    _add_llm_args(p)
-    _add_embed_args(p)
-    p.set_defaults(func=cmd_playbooks)
-
-    return parser
-
-
 # ---------------------------------------------------------------------------
-# New AEM-playbook pipeline commands (triage → semantic-cluster / enrich →
-# generate-playbooks). These replace the old extract→cluster→classify→generate
-# chain for the final submission deliverable.
+# AEM playbook pipeline commands
 # ---------------------------------------------------------------------------
-
-HANDOFF_DIR = Path("cwv-playbooks-handoff")
-PLAYBOOKS_DIR = Path("playbooks")
-CACHE_DIR = DATA_PROCESSED / ".triage_cache"
-
-
-def _add_embed_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--embed-provider", default="openai",
-                   help="openai | openai-compatible | sentence-transformers")
-    p.add_argument("--embed-model", default=None, help="override default embedding model")
-    p.add_argument("--embed-base-url", default=None,
-                   help="base URL for openai-compatible embedding endpoint")
-
 
 def cmd_triage(args: argparse.Namespace) -> None:
-    """Stage 1: summarise all source records, embed, route against existing playbooks."""
+    """Stage 1: summarise records, embed, route against existing playbooks."""
     from cwv_playbook_miner.triage.triage import run_triage, write_triage_jsonl
 
     backend = args.backend or resolve_default_backend()
-    source_paths = [
-        DATA_PROCESSED / "perf_improvement.jsonl",
-        DATA_PROCESSED / "perf_decrease.jsonl",
-        DATA_PROCESSED / "perf_flagged.jsonl",
-    ]
     handoff_dir = Path(args.handoff_dir)
     if not handoff_dir.exists():
         raise SystemExit(f"Handoff dir not found: {handoff_dir}. Pass --handoff-dir.")
 
     records = run_triage(
-        source_paths,
+        [DATA_PROCESSED / f for f in ("perf_improvement.jsonl", "perf_decrease.jsonl", "perf_flagged.jsonl")],
         handoff_dir,
         backend=backend,
         model=args.model,
@@ -621,50 +286,42 @@ def cmd_triage(args: argparse.Namespace) -> None:
     by_route: dict[str, int] = {}
     for r in records:
         by_route[r.route] = by_route.get(r.route, 0) + 1
-    print(f"Wrote {len(records)} triage records to {out}")
+    print(f"Wrote {len(records)} triage records → {out}")
     print(f"  existing: {by_route.get('existing', 0)}, "
           f"novel: {by_route.get('novel', 0)}, "
           f"drop: {by_route.get('drop', 0)}")
 
 
 def cmd_semantic_cluster(args: argparse.Namespace) -> None:
-    """Stage 2b: HDBSCAN clustering of the novel pool."""
+    """Stage 2b: HDBSCAN clustering of novel pool → labelled NovelClusters."""
     from cwv_playbook_miner.triage.triage import read_triage_jsonl
-    from cwv_playbook_miner.extraction.semantic_cluster import cluster_novel_records, write_jsonl as write_clusters
+    from cwv_playbook_miner.extraction.semantic_cluster import cluster_novel_records, write_jsonl
 
-    backend = args.backend or resolve_default_backend()
     triage_path = DATA_PROCESSED / "triage.jsonl"
     if not triage_path.exists():
         raise SystemExit(f"Run `triage` first — {triage_path} not found.")
 
     triage_records = read_triage_jsonl(triage_path)
-
-    # Load all source PRs into a lookup dict
     pr_by_id: dict[str, PRRecord] = {}
-    for path in [
-        DATA_PROCESSED / "perf_improvement.jsonl",
-        DATA_PROCESSED / "perf_decrease.jsonl",
-        DATA_PROCESSED / "perf_flagged.jsonl",
-    ]:
+    for path in (DATA_PROCESSED / f for f in
+                 ("perf_improvement.jsonl", "perf_decrease.jsonl", "perf_flagged.jsonl")):
         if path.exists():
             for pr in read_pr_jsonl(path):
                 pr_by_id[pr.id] = pr
 
+    backend = args.backend or resolve_default_backend()
     clusters = cluster_novel_records(
-        triage_records,
-        pr_by_id,
+        triage_records, pr_by_id,
         embed_provider=args.embed_provider,
         embed_model=args.embed_model,
         embed_base_url=args.embed_base_url,
-        backend=backend,
-        model=args.model,
-        timeout=args.timeout,
+        backend=backend, model=args.model, timeout=args.timeout,
         min_cluster_size=args.min_cluster_size,
     )
 
     out = DATA_PROCESSED / "novel_clusters.jsonl"
-    write_clusters(clusters, out)
-    print(f"Wrote {len(clusters)} novel clusters to {out}")
+    write_jsonl(clusters, out)
+    print(f"Wrote {len(clusters)} novel clusters → {out}")
     for c in clusters:
         print(f"  [{c.issue_type}] {len(c.source_pr_ids)} PRs, "
               f"{c.distinct_repo_count} repos, "
@@ -673,63 +330,50 @@ def cmd_semantic_cluster(args: argparse.Namespace) -> None:
 
 
 def cmd_enrich_extract(args: argparse.Namespace) -> None:
-    """Stage 2a: extract enrichment evidence for existing playbooks."""
+    """Stage 2a: select enrichment evidence per existing playbook."""
     from cwv_playbook_miner.triage.triage import read_triage_jsonl
-    from cwv_playbook_miner.extraction.enrich_extract import extract_enrichments, write_jsonl as write_enrichments
+    from cwv_playbook_miner.extraction.enrich_extract import extract_enrichments, write_jsonl
 
     triage_path = DATA_PROCESSED / "triage.jsonl"
     if not triage_path.exists():
         raise SystemExit(f"Run `triage` first — {triage_path} not found.")
 
     triage_records = read_triage_jsonl(triage_path)
-
     pr_by_id: dict[str, PRRecord] = {}
-    for path in [
-        DATA_PROCESSED / "perf_improvement.jsonl",
-        DATA_PROCESSED / "perf_decrease.jsonl",
-        DATA_PROCESSED / "perf_flagged.jsonl",
-    ]:
+    for path in (DATA_PROCESSED / f for f in
+                 ("perf_improvement.jsonl", "perf_decrease.jsonl", "perf_flagged.jsonl")):
         if path.exists():
             for pr in read_pr_jsonl(path):
                 pr_by_id[pr.id] = pr
 
     evidence = extract_enrichments(triage_records, pr_by_id)
-
     out = DATA_PROCESSED / "enrichments.jsonl"
-    write_enrichments(evidence, out)
-    print(f"Wrote {len(evidence)} enrichment evidence records to {out}")
+    write_jsonl(evidence, out)
+    print(f"Wrote {len(evidence)} enrichment evidence records → {out}")
 
 
 def cmd_generate_playbooks(args: argparse.Namespace) -> None:
-    """Stage 3: generate new {issue_type}.md files and enrichment blocks."""
-    from cwv_playbook_miner.triage.triage import read_triage_jsonl
+    """Stage 3: generate new playbook files and enrichment blocks."""
     from cwv_playbook_miner.extraction.semantic_cluster import read_jsonl as read_clusters
     from cwv_playbook_miner.extraction.enrich_extract import read_jsonl as read_enrichments
     from cwv_playbook_miner.generation.render_playbook import (
-        render_new_playbook, render_enrichment,
-        write_playbook, write_enrichment,
+        render_new_playbook, render_enrichment, write_playbook, write_enrichment,
     )
 
     backend = args.backend or resolve_default_backend()
     handoff_dir = Path(args.handoff_dir)
     if not handoff_dir.exists():
         raise SystemExit(f"Handoff dir not found: {handoff_dir}")
-
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load PR lookup
     pr_by_id: dict[str, PRRecord] = {}
-    for path in [
-        DATA_PROCESSED / "perf_improvement.jsonl",
-        DATA_PROCESSED / "perf_decrease.jsonl",
-        DATA_PROCESSED / "perf_flagged.jsonl",
-    ]:
+    for path in (DATA_PROCESSED / f for f in
+                 ("perf_improvement.jsonl", "perf_decrease.jsonl", "perf_flagged.jsonl")):
         if path.exists():
             for pr in read_pr_jsonl(path):
                 pr_by_id[pr.id] = pr
 
-    # Generate new playbooks from novel clusters
     clusters_path = DATA_PROCESSED / "novel_clusters.jsonl"
     if clusters_path.exists():
         clusters = read_clusters(clusters_path)
@@ -744,48 +388,112 @@ def cmd_generate_playbooks(args: argparse.Namespace) -> None:
             path = write_playbook(text, cluster.issue_type, output_dir)
             print(f"    → {path}")
 
-    # Generate enrichment blocks for existing playbooks
-    enrichments_path = DATA_PROCESSED / "enrichments.jsonl"
-    if enrichments_path.exists() and not args.new_only:
-        enrichments = read_enrichments(enrichments_path)
-        print(f"Generating {len(enrichments)} enrichment blocks...")
-        for ev in enrichments:
-            approach_prs = [pr_by_id[pid] for pid in ev.approach_pr_ids if pid in pr_by_id]
-            antipattern_prs = [pr_by_id[pid] for pid in ev.antipattern_pr_ids if pid in pr_by_id]
-            if not approach_prs and not antipattern_prs:
-                continue
-            print(f"  [{ev.playbook_id}] {len(approach_prs)} approach + "
-                  f"{len(antipattern_prs)} anti-pattern PRs")
-            text = render_enrichment(
-                ev, approach_prs, antipattern_prs, handoff_dir,
-                backend=backend, model=args.model, timeout=args.timeout,
-            )
-            path = write_enrichment(text, ev.playbook_id, output_dir)
-            print(f"    → {path}")
+    if not args.new_only:
+        enrichments_path = DATA_PROCESSED / "enrichments.jsonl"
+        if enrichments_path.exists():
+            enrichments = read_enrichments(enrichments_path)
+            print(f"Generating {len(enrichments)} enrichment blocks...")
+            for ev in enrichments:
+                approach_prs = [pr_by_id[pid] for pid in ev.approach_pr_ids if pid in pr_by_id]
+                antipattern_prs = [pr_by_id[pid] for pid in ev.antipattern_pr_ids if pid in pr_by_id]
+                if not approach_prs and not antipattern_prs:
+                    continue
+                print(f"  [{ev.playbook_id}] {len(approach_prs)} approach + "
+                      f"{len(antipattern_prs)} anti-pattern PRs")
+                text = render_enrichment(
+                    ev, approach_prs, antipattern_prs, handoff_dir,
+                    backend=backend, model=args.model, timeout=args.timeout,
+                )
+                path = write_enrichment(text, ev.playbook_id, output_dir)
+                print(f"    → {path}")
 
     print(f"Done. Output in {output_dir}/")
 
 
 def cmd_playbooks(args: argparse.Namespace) -> None:
-    """Chain triage → semantic-cluster + enrich-extract → generate-playbooks."""
-    # Triage
+    """Full chain: triage → semantic-cluster + enrich-extract → generate-playbooks."""
     args.no_cache = False
     cmd_triage(args)
-    # Novel clustering
     cmd_semantic_cluster(args)
-    # Enrichment evidence
     cmd_enrich_extract(args)
-    # Generate
     cmd_generate_playbooks(args)
 
 
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="cwv-playbook-miner")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("source", help="scan GH Archive window, label, fetch diffs for survivors")
+    p.add_argument("--start", default=None)
+    p.add_argument("--end", default=None)
+    p.add_argument("--hours", type=int, default=6)
+    p.add_argument("--use-cursor", action="store_true")
+    p.add_argument("--append", action="store_true")
+    p.add_argument("--comment-only", action="store_true")
+    p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--api-workers", type=int, default=1)
+    p.set_defaults(func=cmd_source)
+
+    p = sub.add_parser("backfill", help="resumable chunked GH Archive backfill")
+    p.add_argument("--start", default=None)
+    p.add_argument("--end", required=True)
+    p.add_argument("--chunk-hours", type=int, default=24)
+    p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--api-workers", type=int, default=2)
+    p.set_defaults(func=cmd_backfill)
+
+    _HANDOFF = "path to cwv-playbooks-handoff dir (default: cwv-playbooks-handoff)"
+    _OUTPUT = "output dir for generated playbooks (default: playbooks/)"
+
+    p = sub.add_parser("triage", help="[AEM] stage 1: summarise + embed + route")
+    p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF)
+    p.add_argument("--high-threshold", type=float, default=0.78)
+    p.add_argument("--low-threshold", type=float, default=0.45)
+    p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--no-cache", action="store_true")
+    _add_llm_args(p)
+    _add_embed_args(p)
+    p.set_defaults(func=cmd_triage)
+
+    p = sub.add_parser("semantic-cluster", help="[AEM] stage 2b: HDBSCAN novel clustering")
+    p.add_argument("--min-cluster-size", type=int, default=4)
+    _add_llm_args(p)
+    _add_embed_args(p)
+    p.set_defaults(func=cmd_semantic_cluster)
+
+    p = sub.add_parser("enrich-extract", help="[AEM] stage 2a: evidence selection for existing playbooks")
+    p.set_defaults(func=cmd_enrich_extract)
+
+    p = sub.add_parser("generate-playbooks", help="[AEM] stage 3: two-pass AEM-format generation")
+    p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF)
+    p.add_argument("--output-dir", default=str(PLAYBOOKS_DIR), help=_OUTPUT)
+    p.add_argument("--new-only", action="store_true")
+    _add_llm_args(p)
+    p.set_defaults(func=cmd_generate_playbooks)
+
+    p = sub.add_parser("playbooks", help="[AEM] full chain: triage → cluster/enrich → generate")
+    p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF)
+    p.add_argument("--output-dir", default=str(PLAYBOOKS_DIR), help=_OUTPUT)
+    p.add_argument("--high-threshold", type=float, default=0.78)
+    p.add_argument("--low-threshold", type=float, default=0.45)
+    p.add_argument("--min-cluster-size", type=int, default=4)
+    p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--no-cache", action="store_true")
+    p.add_argument("--new-only", action="store_true")
+    _add_llm_args(p)
+    _add_embed_args(p)
+    p.set_defaults(func=cmd_playbooks)
+
+    return parser
+
+
 def main() -> None:
-    # Load .env once, centrally, before any subcommand runs -- llm/client.py
-    # also lazily loads it on first LLM call, but import-external needs
-    # HF_TOKEN before ever touching the LLM client, so it can't rely on that.
     from cwv_playbook_miner.llm.client import _ensure_env_loaded
     _ensure_env_loaded()
-
     parser = build_parser()
     args = parser.parse_args()
     DATA_RAW.mkdir(parents=True, exist_ok=True)
