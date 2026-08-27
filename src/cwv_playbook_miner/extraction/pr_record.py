@@ -1,22 +1,13 @@
-"""The record shape stages 2+ consume -- deliberately similar in spirit to
-smol-planner's `cwv_pr_context.py` record shape (id, repo, signal_type,
-metrics, changed_files with patches) since stages 2+ here play the same role
-its `cwv_pattern_mining.py` extract stage does.
-
-Two real input channels feed this shape:
-  - our own live GH Archive mining (sourcing/gharchive_mine.py + labeling/) --
-    `source="gharchive_live"`
-  - a real, pre-mined external corpus (extraction/external_corpus.py), used
-    because live mining's own perf_improvement yield was confirmed near-zero
-    over ~52 real scanned days (see docs/pipeline-design.md) -- `source`
-    identifies exactly which external dataset/file a record came from, so
-    provenance stays traceable per Julien's "note which source PR(s) each
-    candidate is grounded in."
-"""
+"""The record shape every downstream stage consumes: `id`, `repo`,
+`signal_type`, metrics, `changed_files` with patches, plus everything
+`enrichment/pr_text.py` backfills (title, body, comments/reviews) since GH
+Archive's free event stream never carries those. Written by `sourcing/` +
+`labeling/` (stage 0), read by every stage after it."""
 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -49,13 +40,31 @@ class PRRecord:
     # gharchive_mine.human_flagged_candidates and
     # pattern_extract.py's inferred_signal_type.
     human_signal_text: str | None = None
+    # Backfilled via enrichment/pr_text.py (GitHub GraphQL) -- title/body
+    # aren't in GH Archive's free PullRequestEvent stream, so these stay
+    # None until that stage runs. pr_comments holds every issue comment,
+    # review, and inline review comment: [{"kind": "issue_comment"|"review"|
+    # "review_comment", "author", "body", "created_at", "state", "path"}].
+    # text_truncated is set when a PR had more comments/reviews than the
+    # fetch page size, so it can't silently look "complete" -- same class of
+    # gap the changed_files 30-file GH API cap turned out to be.
+    pr_comments: list[dict] = field(default_factory=list)
+    text_enriched: bool = False
+    text_truncated: bool = False
 
 
 def write_jsonl(records: list[PRRecord], path: Path) -> None:
+    """Writes via a temp file + atomic rename so a concurrent reader (or a
+    crash mid-write) never sees a half-written file -- this file has
+    historically been rewritten whole on every backfill chunk, and a plain
+    in-place open("w") is exactly what caused a reader to catch it
+    mid-truncation once already."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
+    tmp = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
+    with tmp.open("w", encoding="utf-8") as f:
         for r in records:
             f.write(json.dumps(asdict(r)) + "\n")
+    os.replace(tmp, path)
 
 
 def read_jsonl(path: Path) -> list[PRRecord]:

@@ -1,15 +1,17 @@
-"""Stage 3: generate AEM-format playbook files.
+"""Stage 5b+6: generate AEM-format playbook files.
 
 Two generation modes:
-  render_new_playbook   — full {issue_type}.md for a novel cluster
+  render_new_playbook   — full {issue_type}.md for a novel, coherence-verified cluster
   render_enrichment     — new approach/anti-pattern block(s) for an existing playbook
 
-Both use a two-pass approach: draft → AEM-architect critic. The FORMAT.md
-contract and two reference playbooks are injected into every system prompt
-at runtime (read from handoff_dir) so the model always works from the
-authoritative spec, not a cached copy.
+Both use a three-pass approach: draft -> AEM-architect critic -> grounding
+check. The FORMAT.md contract and two reference playbooks are injected into
+every system prompt at runtime (read from handoff_dir) so the model always
+works from the authoritative spec, not a cached copy. Evidence selection is
+diversity-weighted (evidence_selection.py) so one repo's repeated pattern
+can't dominate a technique's evidence on its own.
 
-Model-agnostic: uses complete_text / complete_json from llm/client.py.
+Model-agnostic: uses complete_text from llm/client.py.
 """
 
 from __future__ import annotations
@@ -19,16 +21,20 @@ from pathlib import Path
 
 import yaml
 
-from cwv_playbook_miner.extraction.enrich_extract import EnrichmentEvidence
 from cwv_playbook_miner.extraction.pr_record import PRRecord
-from cwv_playbook_miner.extraction.semantic_cluster import NovelCluster
+from cwv_playbook_miner.extraction.cluster import NovelCluster
+from cwv_playbook_miner.extraction.enrich_extract import EnrichmentEvidence
+from cwv_playbook_miner.extraction.evidence_selection import select_diverse
 from cwv_playbook_miner.llm.client import complete_text
 
 # ---------------------------------------------------------------------------
-# Prompt builders (read live from handoff_dir so they stay current)
+# Shared helpers (read live from handoff_dir so they stay current)
 # ---------------------------------------------------------------------------
 
 _STYLE_REFS = ("bundling.md", "lcp-image.md")   # good representatives of the format
+
+MAX_APPROACH_PRS = 8
+MAX_ANTIPATTERN_PRS = 6
 
 
 def _load_format_spec(handoff_dir: Path) -> str:
@@ -74,8 +80,57 @@ def _pr_evidence_block(prs: list[PRRecord], max_patch_chars: int = 5000) -> str:
     return "\n\n" + "=" * 60 + "\n\n".join(blocks)
 
 
+def _extract_document(text: str) -> str:
+    """Pull the YAML-fronted markdown document out of any wrapper text."""
+    fence = re.search(r"```(?:markdown)?\n(---[\s\S]+?)\n```", text)
+    if fence:
+        return fence.group(1).strip()
+    idx = text.find("---")
+    if idx != -1:
+        return text[idx:].strip()
+    return text.strip()
+
+
+def write_playbook(text: str, issue_type: str, output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"{issue_type}.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def write_enrichment(text: str, playbook_id: str, output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"{playbook_id}.enrichment.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 # ---------------------------------------------------------------------------
-# New playbook (novel cluster)
+# Grounding check (stage 6) -- runs after draft+critic, before the document
+# is considered final. Checks every concrete claim, especially anti-pattern
+# "why this is bad" reasoning, actually traces to the cited evidence rather
+# than being invented-but-plausible justification.
+# ---------------------------------------------------------------------------
+
+_GROUNDING_SYSTEM = """You are fact-checking a generated CWV playbook against its actual source evidence.
+For every concrete claim -- especially any "Why this is bad" reasoning in the Anti-patterns section, any
+specific number, and any claim about what a technique does -- verify it is actually supported by the
+evidence PRs shown below. If a claim isn't supported, either remove it or soften it to what the evidence
+actually shows (e.g. "can increase X" instead of a fabricated specific percentage).
+
+Do not invent support for a claim that has none -- rewrite or cut it instead.
+Output ONLY the complete, corrected Markdown document, unchanged from the input except where a claim
+needed fixing. No commentary."""
+
+
+def _grounding_check(text: str, evidence_block: str, backend: str, model: str | None, timeout: int) -> str:
+    user = f"Evidence PRs:\n{evidence_block}\n\nGenerated document:\n{text}"
+    checked = complete_text(_GROUNDING_SYSTEM, user, backend=backend, model=model, timeout=timeout)
+    return _extract_document(checked) if "---" in checked[:50] else checked.strip()
+
+
+# ---------------------------------------------------------------------------
+# New playbook (novel, coherence-verified cluster)
 # ---------------------------------------------------------------------------
 
 _NEW_PLAYBOOK_DRAFT_SYSTEM = """\
@@ -126,9 +181,28 @@ Output ONLY the complete revised Markdown document starting with `---`. No comme
 """
 
 
+def _reconcile_front_matter(text: str, cluster: NovelCluster) -> str:
+    """Ensure issue_type, applicable_flavors, and risk_tier in the front
+    matter exactly match the cluster metadata (LLM sometimes drifts)."""
+    try:
+        match = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
+        if not match:
+            return text
+        fm = yaml.safe_load(match.group(1)) or {}
+        fm["issue_type"] = cluster.issue_type
+        fm["applicable_flavors"] = cluster.applicable_flavors
+        fm["risk_tier"] = cluster.risk_tier
+        if "source_prs" not in fm:
+            fm["source_prs"] = cluster.source_pr_ids[:20]
+        fm_yaml = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True).rstrip("\n")
+        return f"---\n{fm_yaml}\n---\n{match.group(2)}"
+    except Exception:  # noqa: BLE001
+        return text
+
+
 def render_new_playbook(
     cluster: NovelCluster,
-    source_prs: list[PRRecord],
+    pr_by_id: dict[str, PRRecord],
     handoff_dir: Path,
     *,
     backend: str = "openai",
@@ -137,14 +211,23 @@ def render_new_playbook(
 ) -> str:
     format_spec = _load_format_spec(handoff_dir)
     style_refs = _load_style_refs(handoff_dir)
+    draft_system = _NEW_PLAYBOOK_DRAFT_SYSTEM.format(format_spec=format_spec, style_refs=style_refs)
 
-    draft_system = _NEW_PLAYBOOK_DRAFT_SYSTEM.format(
-        format_spec=format_spec,
-        style_refs=style_refs,
+    # cluster.pr_directions resolves perf_improvement/perf_decrease directly and
+    # perf_flagged via the relevance-judged inferred direction (never guessed --
+    # "unclear"/unclassified perf_flagged PRs are absent from the dict, so they
+    # still ride along in cluster.source_pr_ids but aren't used as evidence here).
+    approach_prs = select_diverse(
+        [pr_by_id[pid] for pid in cluster.source_pr_ids if cluster.pr_directions.get(pid) == "positive" and pid in pr_by_id],
+        MAX_APPROACH_PRS,
+    )
+    antipattern_prs = select_diverse(
+        [pr_by_id[pid] for pid in cluster.source_pr_ids if cluster.pr_directions.get(pid) == "negative" and pid in pr_by_id],
+        MAX_ANTIPATTERN_PRS,
     )
 
-    approach_prs = [pr for pr in source_prs if pr.signal_type == "perf_improvement"]
-    antipattern_prs = [pr for pr in source_prs if pr.signal_type in ("perf_decrease", "perf_flagged")]
+    approach_block = _pr_evidence_block(approach_prs)
+    antipattern_block = _pr_evidence_block(antipattern_prs) if antipattern_prs else "No regression evidence — use forbidden_techniques: []"
 
     draft_user = f"""Novel cluster:
 issue_type: {cluster.issue_type}
@@ -155,19 +238,13 @@ aem_rationale: {cluster.aem_rationale}
 evidence: {cluster.positive_count} improvement PRs, {cluster.negative_count} regression PRs across {cluster.distinct_repo_count} repos
 directional_consistency: {cluster.directional_consistency:.0%}
 
-Representative technique summaries:
-{chr(10).join(f"- {s}" for s in cluster.representative_summaries)}
-
 Improvement evidence (Recommended approaches):
-{_pr_evidence_block(approach_prs)}
+{approach_block}
 
 Regression evidence (Anti-patterns):
-{_pr_evidence_block(antipattern_prs) if antipattern_prs else "No regression evidence — use forbidden_techniques: []"}
+{antipattern_block}
 """
-
-    draft = _extract_document(
-        complete_text(draft_system, draft_user, backend=backend, model=model, timeout=timeout)
-    )
+    draft = _extract_document(complete_text(draft_system, draft_user, backend=backend, model=model, timeout=timeout))
 
     critic_user = f"""Evidence summary:
 issue_type: {cluster.issue_type} | flavors: {cluster.applicable_flavors} | tier: {cluster.risk_tier}
@@ -176,10 +253,12 @@ issue_type: {cluster.issue_type} | flavors: {cluster.applicable_flavors} | tier:
 Draft to review and rewrite:
 {draft}
 """
-    final = _extract_document(
-        complete_text(_NEW_PLAYBOOK_CRITIC_SYSTEM, critic_user, backend=backend, model=model, timeout=timeout)
-    )
-    return _reconcile_front_matter(final, cluster)
+    critiqued = _extract_document(complete_text(_NEW_PLAYBOOK_CRITIC_SYSTEM, critic_user, backend=backend, model=model, timeout=timeout))
+
+    full_evidence = approach_block + "\n\n" + antipattern_block
+    grounded = _grounding_check(critiqued, full_evidence, backend, model, timeout)
+
+    return _reconcile_front_matter(grounded, cluster)
 
 
 # ---------------------------------------------------------------------------
@@ -227,29 +306,28 @@ Output ONLY the corrected new content block(s). No commentary.
 
 def render_enrichment(
     evidence: EnrichmentEvidence,
-    approach_prs: list[PRRecord],
-    antipattern_prs: list[PRRecord],
+    pr_by_id: dict[str, PRRecord],
     handoff_dir: Path,
     *,
     backend: str = "openai",
     model: str | None = None,
     timeout: int = 180,
 ) -> str:
-    existing = _load_existing_playbook(handoff_dir, evidence.playbook_id)
+    approach_prs = [pr_by_id[pid] for pid in evidence.approach_pr_ids if pid in pr_by_id]
+    antipattern_prs = [pr_by_id[pid] for pid in evidence.antipattern_pr_ids if pid in pr_by_id]
 
+    existing = _load_existing_playbook(handoff_dir, evidence.playbook_id)
     draft_system = _ENRICH_DRAFT_SYSTEM.format(existing_playbook=existing)
 
+    approach_block = _pr_evidence_block(approach_prs) if approach_prs else "None"
+    antipattern_block = _pr_evidence_block(antipattern_prs) if antipattern_prs else "None"
+
     draft_user = f"""Improvement evidence (new Recommended approaches):
-{_pr_evidence_block(approach_prs) if approach_prs else "None"}
+{approach_block}
 
 Regression evidence (new Anti-patterns):
-{_pr_evidence_block(antipattern_prs) if antipattern_prs else "None"}
-
-Technique summaries:
-{chr(10).join(f"[improvement] {s}" for s in evidence.approach_summaries)}
-{chr(10).join(f"[regression]  {s}" for s in evidence.antipattern_summaries)}
+{antipattern_block}
 """
-
     draft = complete_text(draft_system, draft_user, backend=backend, model=model, timeout=timeout).strip()
 
     critic_user = f"""Existing playbook (for duplicate-check):
@@ -258,52 +336,7 @@ Technique summaries:
 Proposed new content to review:
 {draft}
 """
-    return complete_text(_ENRICH_CRITIC_SYSTEM, critic_user, backend=backend, model=model, timeout=timeout).strip()
+    critiqued = complete_text(_ENRICH_CRITIC_SYSTEM, critic_user, backend=backend, model=model, timeout=timeout).strip()
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _extract_document(text: str) -> str:
-    """Pull the YAML-fronted markdown document out of any wrapper text."""
-    fence = re.search(r"```(?:markdown)?\n(---[\s\S]+?)\n```", text)
-    if fence:
-        return fence.group(1).strip()
-    idx = text.find("---")
-    if idx != -1:
-        return text[idx:].strip()
-    return text.strip()
-
-
-def _reconcile_front_matter(text: str, cluster: NovelCluster) -> str:
-    """Ensure issue_type, applicable_flavors, and risk_tier in the front
-    matter exactly match the cluster metadata (LLM sometimes drifts)."""
-    try:
-        match = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
-        if not match:
-            return text
-        fm = yaml.safe_load(match.group(1)) or {}
-        fm["issue_type"] = cluster.issue_type
-        fm["applicable_flavors"] = cluster.applicable_flavors
-        fm["risk_tier"] = cluster.risk_tier
-        if "source_prs" not in fm:
-            fm["source_prs"] = cluster.source_pr_ids[:20]
-        fm_yaml = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True).rstrip("\n")
-        return f"---\n{fm_yaml}\n---\n{match.group(2)}"
-    except Exception:  # noqa: BLE001
-        return text
-
-
-def write_playbook(text: str, issue_type: str, output_dir: Path) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{issue_type}.md"
-    path.write_text(text, encoding="utf-8")
-    return path
-
-
-def write_enrichment(text: str, playbook_id: str, output_dir: Path) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{playbook_id}.enrichment.md"
-    path.write_text(text, encoding="utf-8")
-    return path
+    full_evidence = approach_block + "\n\n" + antipattern_block
+    return _grounding_check(critiqued, full_evidence, backend, model, timeout).strip()

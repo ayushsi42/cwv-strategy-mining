@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1580 220" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <style>
+    .bg { fill: #ffffff; }
+    .card { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1; }
+    .badge { fill: #0969da; }
+    .badge-text { fill: #ffffff; font-weight: 700; font-size: 13px; }
+    .stage { fill: #1f2328; font-weight: 700; font-size: 15px; }
+    .job { fill: #57606a; font-size: 11px; }
+    .stat { fill: #0969da; font-weight: 800; font-size: 22px; }
+    .stat-small { fill: #0969da; font-weight: 800; font-size: 15px; }
+    .stat-label { fill: #57606a; font-size: 10px; }
+    .arrow { stroke: #8c959f; stroke-width: 2; fill: none; }
+    .arrowhead { fill: #8c959f; }
+    .title { fill: #1f2328; font-weight: 700; font-size: 16px; }
+    .foot { fill: #57606a; font-size: 12px; }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="1580" height="220"/>
+
+  <text class="title" x="0" y="24">cwv-playbook-miner pipeline</text>
+
+  <!-- 1. SOURCE -->
+  <g transform="translate(0,50)">
+    <rect class="card" x="0" y="0" width="220" height="120" rx="10"/>
+    <circle class="badge" cx="24" cy="24" r="14"/>
+    <text class="badge-text" x="24" y="29" text-anchor="middle">1</text>
+    <text class="stage" x="46" y="29">Source</text>
+    <text class="job" x="16" y="52">Scan GH Archive for merged</text>
+    <text class="job" x="16" y="66">PRs with a measured or human-</text>
+    <text class="job" x="16" y="80">flagged performance signal</text>
+    <text class="stat" x="16" y="107">14,965</text>
+    <text class="stat-label" x="16" y="118">source records</text>
+  </g>
+
+  <g transform="translate(220,110)">
+    <line class="arrow" x1="4" y1="0" x2="38" y2="0"/>
+    <path class="arrowhead" d="M 38 0 L 30 -5 L 30 5 Z"/>
+  </g>
+
+  <!-- 2. ENRICH -->
+  <g transform="translate(266,50)">
+    <rect class="card" x="0" y="0" width="220" height="120" rx="10"/>
+    <circle class="badge" cx="24" cy="24" r="14"/>
+    <text class="badge-text" x="24" y="29" text-anchor="middle">2</text>
+    <text class="stage" x="46" y="29">Enrich</text>
+    <text class="job" x="16" y="52">Backfill title, body, comments</text>
+    <text class="job" x="16" y="66">and reviews via GitHub GraphQL</text>
+    <text class="job" x="16" y="80">— GH Archive omits these</text>
+    <text class="stat" x="16" y="107">14,919</text>
+    <text class="stat-label" x="16" y="118">with real text (99.7%)</text>
+  </g>
+
+  <g transform="translate(486,110)">
+    <line class="arrow" x1="4" y1="0" x2="38" y2="0"/>
+    <path class="arrowhead" d="M 38 0 L 30 -5 L 30 5 Z"/>
+  </g>
+
+  <!-- 3. EXTRACT -->
+  <g transform="translate(532,50)">
+    <rect class="card" x="0" y="0" width="220" height="120" rx="10"/>
+    <circle class="badge" cx="24" cy="24" r="14"/>
+    <text class="badge-text" x="24" y="29" text-anchor="middle">3</text>
+    <text class="stage" x="46" y="29">Extract</text>
+    <text class="job" x="16" y="52">Judge CWV relevance (LCP,</text>
+    <text class="job" x="16" y="66">CLS, INP) first, then extract</text>
+    <text class="job" x="16" y="80">technique, mechanism, phase</text>
+    <text class="stat" x="16" y="107">4,163</text>
+    <text class="stat-label" x="16" y="118">CWV-motivated (27.8%)</text>
+  </g>
+
+  <g transform="translate(752,110)">
+    <line class="arrow" x1="4" y1="0" x2="38" y2="0"/>
+    <path class="arrowhead" d="M 38 0 L 30 -5 L 30 5 Z"/>
+  </g>
+
+  <!-- 4. ROUTE -->
+  <g transform="translate(798,50)">
+    <rect class="card" x="0" y="0" width="220" height="120" rx="10"/>
+    <circle class="badge" cx="24" cy="24" r="14"/>
+    <text class="badge-text" x="24" y="29" text-anchor="middle">4</text>
+    <text class="stage" x="46" y="29">Route</text>
+    <text class="job" x="16" y="52">Retrieve top candidates by</text>
+    <text class="job" x="16" y="66">embedding, then an LLM verifies</text>
+    <text class="job" x="16" y="80">against the real playbook text</text>
+    <text class="stat-small" x="16" y="105">1,861 existing</text>
+    <text class="stat-small" x="16" y="122">2,302 novel</text>
+  </g>
+
+  <g transform="translate(1018,110)">
+    <line class="arrow" x1="4" y1="0" x2="38" y2="0"/>
+    <path class="arrowhead" d="M 38 0 L 30 -5 L 30 5 Z"/>
+  </g>
+
+  <!-- 5. CLUSTER -->
+  <g transform="translate(1064,50)">
+    <rect class="card" x="0" y="0" width="220" height="120" rx="10"/>
+    <circle class="badge" cx="24" cy="24" r="14"/>
+    <text class="badge-text" x="24" y="29" text-anchor="middle">5</text>
+    <text class="stage" x="46" y="29">Cluster</text>
+    <text class="job" x="16" y="52">HDBSCAN groups the novel</text>
+    <text class="job" x="16" y="66">pool, then a coherence check</text>
+    <text class="job" x="16" y="80">confirms each group is real</text>
+    <text class="stat" x="16" y="107">9</text>
+    <text class="stat-label" x="16" y="118">confirmed (of 72 raw)</text>
+  </g>
+
+  <g transform="translate(1284,110)">
+    <line class="arrow" x1="4" y1="0" x2="38" y2="0"/>
+    <path class="arrowhead" d="M 38 0 L 30 -5 L 30 5 Z"/>
+  </g>
+
+  <!-- 6. GENERATE -->
+  <g transform="translate(1330,50)">
+    <rect class="card" x="0" y="0" width="220" height="120" rx="10"/>
+    <circle class="badge" cx="24" cy="24" r="14"/>
+    <text class="badge-text" x="24" y="29" text-anchor="middle">6</text>
+    <text class="stage" x="46" y="29">Generate</text>
+    <text class="job" x="16" y="52">Draft, AEM-architect critic,</text>
+    <text class="job" x="16" y="66">then a grounding check against</text>
+    <text class="job" x="16" y="80">the real cited evidence</text>
+    <text class="stat" x="16" y="107">26</text>
+    <text class="stat-label" x="16" y="118">playbook files</text>
+  </g>
+
+  <text class="foot" x="0" y="200">Every decision runs on real PR text (title / body / diff / comments) — never a short phrase, never a bare threshold.</text>
+</svg>

@@ -1,17 +1,25 @@
 """CLI entrypoint for cwv-playbook-miner.
 
-Two command groups:
+Three command groups:
 
   Sourcing (GH Archive → raw PR records):
-    source      — live scan a time window
-    backfill    — resumable chunked multi-day scan
+    source            — live scan a time window
+    backfill          — resumable chunked multi-day scan
 
-  AEM playbook pipeline (raw records → AEM-format playbooks):
-    triage           — stage 1: summarise + embed + route
-    semantic-cluster — stage 2b: HDBSCAN novel clustering
-    enrich-extract   — stage 2a: evidence selection for existing playbooks
-    generate-playbooks — stage 3: AEM-format generation (two-pass)
-    playbooks        — full chain: all four stages above
+  Enrichment (backfills fields GH Archive's free stream doesn't carry):
+    enrich-pr-text    — title/body/comments/reviews via GitHub GraphQL
+    refetch-truncated — paginated re-fetch for records that hit a page cap
+
+  Pipeline (raw + enriched records → AEM-format playbooks). Every decision
+  runs on real PR text (title/body/diff/comments), never a short phrase or
+  a bare threshold — see SESSION_NOTES.md for the design rationale:
+    extract            — stage 1: rich per-PR technique extraction
+    extract-playbooks  — stage 1.5: same fact-shape from the 20 curated playbooks
+    route              — stage 2: retrieve-then-verify routing (existing vs novel)
+    cluster            — stage 3+4: coherence-verified clustering + labeling
+    enrich-extract     — stage 5a: diversity-weighted existing-playbook evidence
+    generate           — stage 5b+6: generation with grounding check
+    playbooks          — full chain: all six stages above
 """
 
 from __future__ import annotations
@@ -35,14 +43,16 @@ DATA_PROCESSED = Path("data/processed")
 CURSOR_PATH = DATA_RAW / "gharchive_cursor.json"
 HANDOFF_DIR = Path("cwv-playbooks-handoff")
 PLAYBOOKS_DIR = Path("playbooks")
-CACHE_DIR = DATA_PROCESSED / ".triage_cache"
+
+_HANDOFF = "path to cwv-playbooks-handoff dir (default: cwv-playbooks-handoff)"
+_OUTPUT = "output dir for generated playbooks (default: playbooks/)"
 
 
 def _add_llm_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--backend", default=None,
                    help="openai | openai-compatible (default: openai, requires OPENAI_API_KEY)")
     p.add_argument("--model", default=None)
-    p.add_argument("--timeout", type=int, default=120)
+    p.add_argument("--timeout", type=int, default=180)
 
 
 def _add_embed_args(p: argparse.ArgumentParser) -> None:
@@ -254,107 +264,175 @@ def cmd_backfill(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
-# AEM playbook pipeline commands
+# Enrichment commands
 # ---------------------------------------------------------------------------
 
-def cmd_triage(args: argparse.Namespace) -> None:
-    """Stage 1: summarise records, embed, route against existing playbooks."""
-    from cwv_playbook_miner.triage.triage import run_triage, write_triage_jsonl
+def cmd_enrich_pr_text(args: argparse.Namespace) -> None:
+    """Backfill title/pr_body_markdown/pr_comments via GitHub GraphQL --
+    GH Archive's free event stream never carries PR title/body."""
+    from cwv_playbook_miner.enrichment.pr_text import enrich_records
+
+    cache_dir = DATA_PROCESSED / ".pr_text_cache"
+    for filename in ("perf_improvement.jsonl", "perf_decrease.jsonl", "perf_flagged.jsonl"):
+        path = DATA_PROCESSED / filename
+        if not path.exists():
+            print(f"skipping {filename} (not found)")
+            continue
+        records = read_pr_jsonl(path)
+        print(f"=== {filename}: {len(records)} records ===")
+        enrich_records(records, batch_size=args.batch_size, cache_dir=cache_dir)
+        write_pr_jsonl(records, path)
+        print(f"  wrote {path}")
+
+
+def cmd_refetch_truncated(args: argparse.Namespace) -> None:
+    """Full (paginated, uncapped) re-fetch for every record enrich-pr-text
+    flagged text_truncated -- per-PR, not batched, since pagination cursors
+    don't compose across aliases the way the first pass did."""
+    from cwv_playbook_miner.enrichment.pr_text_paginate import refetch_truncated
+
+    cache_dir = DATA_PROCESSED / ".pr_text_full_cache"
+    for filename in ("perf_improvement.jsonl", "perf_decrease.jsonl", "perf_flagged.jsonl"):
+        path = DATA_PROCESSED / filename
+        if not path.exists():
+            print(f"skipping {filename} (not found)")
+            continue
+        records = read_pr_jsonl(path)
+        n_trunc = sum(1 for r in records if r.text_truncated)
+        if not n_trunc:
+            print(f"=== {filename}: 0 truncated, skipping ===")
+            continue
+        print(f"=== {filename}: {n_trunc} truncated of {len(records)} ===")
+        refetch_truncated(records, cache_dir=cache_dir)
+        write_pr_jsonl(records, path)
+        print(f"  wrote {path}")
+
+
+# ---------------------------------------------------------------------------
+# Pipeline commands
+# ---------------------------------------------------------------------------
+
+def _load_all_pr_records() -> list[PRRecord]:
+    records: list[PRRecord] = []
+    for filename in ("perf_improvement.jsonl", "perf_decrease.jsonl", "perf_flagged.jsonl"):
+        path = DATA_PROCESSED / filename
+        if path.exists():
+            records.extend(read_pr_jsonl(path))
+    return records
+
+
+def cmd_extract(args: argparse.Namespace) -> None:
+    """Stage 1: rich per-PR technique extraction (real context, not a phrase)."""
+    from cwv_playbook_miner.extraction.technique_extract import extract_records, write_jsonl
+
+    backend = args.backend or resolve_default_backend()
+    records = _load_all_pr_records()
+    print(f"[extract] loaded {len(records)} source records")
+
+    extractions = extract_records(
+        records, backend=backend, model=args.model, timeout=args.timeout,
+        workers=args.workers, cache_dir=None if args.no_cache else DATA_PROCESSED / ".technique_extract_cache",
+    )
+    out = DATA_PROCESSED / "extractions.jsonl"
+    write_jsonl(extractions, out)
+    n_drop = sum(1 for e in extractions if e.drop)
+    print(f"Wrote {len(extractions)} extractions → {out} ({n_drop} dropped, {len(extractions) - n_drop} kept)")
+
+
+def cmd_extract_playbooks(args: argparse.Namespace) -> None:
+    """Stage 1.5: extract the same fact-shape from the 20 curated playbooks."""
+    from cwv_playbook_miner.extraction.playbook_facts import extract_playbook_facts, write_jsonl
 
     backend = args.backend or resolve_default_backend()
     handoff_dir = Path(args.handoff_dir)
-    if not handoff_dir.exists():
-        raise SystemExit(f"Handoff dir not found: {handoff_dir}. Pass --handoff-dir.")
-
-    records = run_triage(
-        [DATA_PROCESSED / f for f in ("perf_improvement.jsonl", "perf_decrease.jsonl", "perf_flagged.jsonl")],
-        handoff_dir,
-        backend=backend,
-        model=args.model,
-        embed_provider=args.embed_provider,
-        embed_model=args.embed_model,
-        embed_base_url=args.embed_base_url,
-        summarize_workers=args.workers,
-        timeout=args.timeout,
-        cache_dir=CACHE_DIR if not args.no_cache else None,
-        high_threshold=args.high_threshold,
-        low_threshold=args.low_threshold,
-    )
-
-    out = DATA_PROCESSED / "triage.jsonl"
-    write_triage_jsonl(records, out)
-    by_route: dict[str, int] = {}
-    for r in records:
-        by_route[r.route] = by_route.get(r.route, 0) + 1
-    print(f"Wrote {len(records)} triage records → {out}")
-    print(f"  existing: {by_route.get('existing', 0)}, "
-          f"novel: {by_route.get('novel', 0)}, "
-          f"drop: {by_route.get('drop', 0)}")
+    facts = extract_playbook_facts(handoff_dir, backend=backend, model=args.model, timeout=args.timeout)
+    out = DATA_PROCESSED / "playbook_facts.jsonl"
+    write_jsonl(facts, out)
+    print(f"Wrote {len(facts)} playbook facts → {out}")
 
 
-def cmd_semantic_cluster(args: argparse.Namespace) -> None:
-    """Stage 2b: HDBSCAN clustering of novel pool → labelled NovelClusters."""
-    from cwv_playbook_miner.triage.triage import read_triage_jsonl
-    from cwv_playbook_miner.extraction.semantic_cluster import cluster_novel_records, write_jsonl
-
-    triage_path = DATA_PROCESSED / "triage.jsonl"
-    if not triage_path.exists():
-        raise SystemExit(f"Run `triage` first — {triage_path} not found.")
-
-    triage_records = read_triage_jsonl(triage_path)
-    pr_by_id: dict[str, PRRecord] = {}
-    for path in (DATA_PROCESSED / f for f in
-                 ("perf_improvement.jsonl", "perf_decrease.jsonl", "perf_flagged.jsonl")):
-        if path.exists():
-            for pr in read_pr_jsonl(path):
-                pr_by_id[pr.id] = pr
+def cmd_route(args: argparse.Namespace) -> None:
+    """Stage 2: retrieve-then-verify routing (existing vs novel)."""
+    from cwv_playbook_miner.extraction.technique_extract import read_jsonl as read_extractions
+    from cwv_playbook_miner.extraction.playbook_facts import read_jsonl as read_playbook_facts
+    from cwv_playbook_miner.routing.route import route_records, write_jsonl
 
     backend = args.backend or resolve_default_backend()
-    clusters = cluster_novel_records(
-        triage_records, pr_by_id,
-        embed_provider=args.embed_provider,
-        embed_model=args.embed_model,
-        embed_base_url=args.embed_base_url,
-        backend=backend, model=args.model, timeout=args.timeout,
-        min_cluster_size=args.min_cluster_size,
-    )
+    extractions_path = DATA_PROCESSED / "extractions.jsonl"
+    facts_path = DATA_PROCESSED / "playbook_facts.jsonl"
+    if not extractions_path.exists():
+        raise SystemExit(f"Run `extract` first — {extractions_path} not found.")
+    if not facts_path.exists():
+        raise SystemExit(f"Run `extract-playbooks` first — {facts_path} not found.")
 
+    extraction_by_id = {e.record_id: e for e in read_extractions(extractions_path)}
+    playbook_facts = read_playbook_facts(facts_path)
+    records = _load_all_pr_records()
+
+    routes = route_records(
+        records, extraction_by_id, playbook_facts, Path(args.handoff_dir),
+        embed_provider=args.embed_provider, embed_model=args.embed_model, embed_base_url=args.embed_base_url,
+        backend=backend, model=args.model, timeout=args.timeout,
+        cache_dir=DATA_PROCESSED / ".route_cache",
+    )
+    out = DATA_PROCESSED / "routing.jsonl"
+    write_jsonl(routes, out)
+    by_route: dict[str, int] = {}
+    for r in routes:
+        by_route[r.route] = by_route.get(r.route, 0) + 1
+    print(f"Wrote {len(routes)} routing records → {out}")
+    print(f"  {by_route}")
+
+
+def cmd_cluster(args: argparse.Namespace) -> None:
+    """Stage 3+4: bottom-up clustering, coherence verification, labeling."""
+    from cwv_playbook_miner.extraction.technique_extract import read_jsonl as read_extractions
+    from cwv_playbook_miner.routing.route import read_jsonl as read_routing
+    from cwv_playbook_miner.extraction.cluster import cluster_and_label, write_jsonl
+
+    backend = args.backend or resolve_default_backend()
+    routing_path = DATA_PROCESSED / "routing.jsonl"
+    extractions_path = DATA_PROCESSED / "extractions.jsonl"
+    if not routing_path.exists():
+        raise SystemExit(f"Run `route` first — {routing_path} not found.")
+
+    routing_records = read_routing(routing_path)
+    extraction_by_id = {e.record_id: e for e in read_extractions(extractions_path)}
+    pr_by_id = {r.id: r for r in _load_all_pr_records()}
+
+    clusters = cluster_and_label(
+        routing_records, pr_by_id, extraction_by_id,
+        embed_provider=args.embed_provider, embed_model=args.embed_model, embed_base_url=args.embed_base_url,
+        backend=backend, model=args.model, timeout=args.timeout, min_cluster_size=args.min_cluster_size,
+    )
     out = DATA_PROCESSED / "novel_clusters.jsonl"
     write_jsonl(clusters, out)
-    print(f"Wrote {len(clusters)} novel clusters → {out}")
-    for c in clusters:
-        print(f"  [{c.issue_type}] {len(c.source_pr_ids)} PRs, "
-              f"{c.distinct_repo_count} repos, "
-              f"{c.directional_consistency:.0%} consistent, "
-              f"flavors={c.applicable_flavors}")
+    print(f"Wrote {len(clusters)} clusters → {out}")
 
 
 def cmd_enrich_extract(args: argparse.Namespace) -> None:
-    """Stage 2a: select enrichment evidence per existing playbook."""
-    from cwv_playbook_miner.triage.triage import read_triage_jsonl
+    """Stage 5a: diversity-weighted evidence selection for existing playbooks."""
+    from cwv_playbook_miner.extraction.technique_extract import read_jsonl as read_extractions
+    from cwv_playbook_miner.routing.route import read_jsonl as read_routing
     from cwv_playbook_miner.extraction.enrich_extract import extract_enrichments, write_jsonl
 
-    triage_path = DATA_PROCESSED / "triage.jsonl"
-    if not triage_path.exists():
-        raise SystemExit(f"Run `triage` first — {triage_path} not found.")
+    routing_path = DATA_PROCESSED / "routing.jsonl"
+    if not routing_path.exists():
+        raise SystemExit(f"Run `route` first — {routing_path} not found.")
 
-    triage_records = read_triage_jsonl(triage_path)
-    pr_by_id: dict[str, PRRecord] = {}
-    for path in (DATA_PROCESSED / f for f in
-                 ("perf_improvement.jsonl", "perf_decrease.jsonl", "perf_flagged.jsonl")):
-        if path.exists():
-            for pr in read_pr_jsonl(path):
-                pr_by_id[pr.id] = pr
+    routing_records = read_routing(routing_path)
+    extraction_by_id = {e.record_id: e for e in read_extractions(DATA_PROCESSED / "extractions.jsonl")}
+    pr_by_id = {r.id: r for r in _load_all_pr_records()}
 
-    evidence = extract_enrichments(triage_records, pr_by_id)
+    evidence = extract_enrichments(routing_records, pr_by_id, extraction_by_id)
     out = DATA_PROCESSED / "enrichments.jsonl"
     write_jsonl(evidence, out)
     print(f"Wrote {len(evidence)} enrichment evidence records → {out}")
 
 
-def cmd_generate_playbooks(args: argparse.Namespace) -> None:
-    """Stage 3: generate new playbook files and enrichment blocks."""
-    from cwv_playbook_miner.extraction.semantic_cluster import read_jsonl as read_clusters
+def cmd_generate(args: argparse.Namespace) -> None:
+    """Stage 5b+6: generation with diversity-weighted evidence + grounding check."""
+    from cwv_playbook_miner.extraction.cluster import read_jsonl as read_clusters
     from cwv_playbook_miner.extraction.enrich_extract import read_jsonl as read_enrichments
     from cwv_playbook_miner.generation.render_playbook import (
         render_new_playbook, render_enrichment, write_playbook, write_enrichment,
@@ -362,29 +440,21 @@ def cmd_generate_playbooks(args: argparse.Namespace) -> None:
 
     backend = args.backend or resolve_default_backend()
     handoff_dir = Path(args.handoff_dir)
-    if not handoff_dir.exists():
-        raise SystemExit(f"Handoff dir not found: {handoff_dir}")
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    pr_by_id: dict[str, PRRecord] = {}
-    for path in (DATA_PROCESSED / f for f in
-                 ("perf_improvement.jsonl", "perf_decrease.jsonl", "perf_flagged.jsonl")):
-        if path.exists():
-            for pr in read_pr_jsonl(path):
-                pr_by_id[pr.id] = pr
+    pr_by_id = {r.id: r for r in _load_all_pr_records()}
 
     clusters_path = DATA_PROCESSED / "novel_clusters.jsonl"
     if clusters_path.exists():
         clusters = read_clusters(clusters_path)
         print(f"Generating {len(clusters)} new playbooks...")
         for cluster in clusters:
-            source_prs = [pr_by_id[pid] for pid in cluster.source_pr_ids if pid in pr_by_id]
-            print(f"  [{cluster.issue_type}] {len(source_prs)} source PRs")
-            text = render_new_playbook(
-                cluster, source_prs, handoff_dir,
-                backend=backend, model=args.model, timeout=args.timeout,
-            )
+            out_path = output_dir / f"{cluster.issue_type}.md"
+            if out_path.exists() and not args.overwrite:
+                print(f"  [{cluster.issue_type}] already exists, skipping (--overwrite to redo)")
+                continue
+            print(f"  [{cluster.issue_type}] {len(cluster.source_pr_ids)} source PRs")
+            text = render_new_playbook(cluster, pr_by_id, handoff_dir, backend=backend, model=args.model, timeout=args.timeout)
             path = write_playbook(text, cluster.issue_type, output_dir)
             print(f"    → {path}")
 
@@ -394,16 +464,14 @@ def cmd_generate_playbooks(args: argparse.Namespace) -> None:
             enrichments = read_enrichments(enrichments_path)
             print(f"Generating {len(enrichments)} enrichment blocks...")
             for ev in enrichments:
-                approach_prs = [pr_by_id[pid] for pid in ev.approach_pr_ids if pid in pr_by_id]
-                antipattern_prs = [pr_by_id[pid] for pid in ev.antipattern_pr_ids if pid in pr_by_id]
-                if not approach_prs and not antipattern_prs:
+                if not ev.approach_pr_ids and not ev.antipattern_pr_ids:
                     continue
-                print(f"  [{ev.playbook_id}] {len(approach_prs)} approach + "
-                      f"{len(antipattern_prs)} anti-pattern PRs")
-                text = render_enrichment(
-                    ev, approach_prs, antipattern_prs, handoff_dir,
-                    backend=backend, model=args.model, timeout=args.timeout,
-                )
+                out_path = output_dir / f"{ev.playbook_id}.enrichment.md"
+                if out_path.exists() and not args.overwrite:
+                    print(f"  [{ev.playbook_id}] already exists, skipping (--overwrite to redo)")
+                    continue
+                print(f"  [{ev.playbook_id}] {len(ev.approach_pr_ids)} approach + {len(ev.antipattern_pr_ids)} anti-pattern PRs")
+                text = render_enrichment(ev, pr_by_id, handoff_dir, backend=backend, model=args.model, timeout=args.timeout)
                 path = write_enrichment(text, ev.playbook_id, output_dir)
                 print(f"    → {path}")
 
@@ -411,12 +479,14 @@ def cmd_generate_playbooks(args: argparse.Namespace) -> None:
 
 
 def cmd_playbooks(args: argparse.Namespace) -> None:
-    """Full chain: triage → semantic-cluster + enrich-extract → generate-playbooks."""
+    """Full chain: extract → extract-playbooks → route → cluster + enrich-extract → generate."""
     args.no_cache = False
-    cmd_triage(args)
-    cmd_semantic_cluster(args)
+    cmd_extract(args)
+    cmd_extract_playbooks(args)
+    cmd_route(args)
+    cmd_cluster(args)
     cmd_enrich_extract(args)
-    cmd_generate_playbooks(args)
+    cmd_generate(args)
 
 
 # ---------------------------------------------------------------------------
@@ -446,44 +516,54 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--api-workers", type=int, default=2)
     p.set_defaults(func=cmd_backfill)
 
-    _HANDOFF = "path to cwv-playbooks-handoff dir (default: cwv-playbooks-handoff)"
-    _OUTPUT = "output dir for generated playbooks (default: playbooks/)"
+    p = sub.add_parser("enrich-pr-text", help="backfill title/body/comments/reviews via GitHub GraphQL")
+    p.add_argument("--batch-size", type=int, default=40, help="PRs per GraphQL query (default: 40)")
+    p.set_defaults(func=cmd_enrich_pr_text)
 
-    p = sub.add_parser("triage", help="[AEM] stage 1: summarise + embed + route")
-    p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF)
-    p.add_argument("--high-threshold", type=float, default=0.78)
-    p.add_argument("--low-threshold", type=float, default=0.45)
+    p = sub.add_parser("refetch-truncated", help="paginated re-fetch for records enrich-pr-text flagged text_truncated")
+    p.set_defaults(func=cmd_refetch_truncated)
+
+    p = sub.add_parser("extract", help="stage 1: rich per-PR technique extraction")
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--no-cache", action="store_true")
     _add_llm_args(p)
-    _add_embed_args(p)
-    p.set_defaults(func=cmd_triage)
+    p.set_defaults(func=cmd_extract)
 
-    p = sub.add_parser("semantic-cluster", help="[AEM] stage 2b: HDBSCAN novel clustering")
+    p = sub.add_parser("extract-playbooks", help="stage 1.5: extract facts from the 20 curated playbooks")
+    p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF)
+    _add_llm_args(p)
+    p.set_defaults(func=cmd_extract_playbooks)
+
+    p = sub.add_parser("route", help="stage 2: retrieve-then-verify routing")
+    p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF)
+    _add_llm_args(p)
+    _add_embed_args(p)
+    p.set_defaults(func=cmd_route)
+
+    p = sub.add_parser("cluster", help="stage 3+4: coherence-verified clustering + labeling")
     p.add_argument("--min-cluster-size", type=int, default=4)
     _add_llm_args(p)
     _add_embed_args(p)
-    p.set_defaults(func=cmd_semantic_cluster)
+    p.set_defaults(func=cmd_cluster)
 
-    p = sub.add_parser("enrich-extract", help="[AEM] stage 2a: evidence selection for existing playbooks")
+    p = sub.add_parser("enrich-extract", help="stage 5a: diversity-weighted existing-playbook evidence")
     p.set_defaults(func=cmd_enrich_extract)
 
-    p = sub.add_parser("generate-playbooks", help="[AEM] stage 3: two-pass AEM-format generation")
+    p = sub.add_parser("generate", help="stage 5b+6: generation with grounding check")
     p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF)
     p.add_argument("--output-dir", default=str(PLAYBOOKS_DIR), help=_OUTPUT)
     p.add_argument("--new-only", action="store_true")
+    p.add_argument("--overwrite", action="store_true", help="regenerate even if the output file already exists")
     _add_llm_args(p)
-    p.set_defaults(func=cmd_generate_playbooks)
+    p.set_defaults(func=cmd_generate)
 
-    p = sub.add_parser("playbooks", help="[AEM] full chain: triage → cluster/enrich → generate")
+    p = sub.add_parser("playbooks", help="full chain: extract → route → cluster/enrich-extract → generate")
     p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF)
     p.add_argument("--output-dir", default=str(PLAYBOOKS_DIR), help=_OUTPUT)
-    p.add_argument("--high-threshold", type=float, default=0.78)
-    p.add_argument("--low-threshold", type=float, default=0.45)
     p.add_argument("--min-cluster-size", type=int, default=4)
     p.add_argument("--workers", type=int, default=8)
-    p.add_argument("--no-cache", action="store_true")
     p.add_argument("--new-only", action="store_true")
+    p.add_argument("--overwrite", action="store_true", help="regenerate even if the output file already exists")
     _add_llm_args(p)
     _add_embed_args(p)
     p.set_defaults(func=cmd_playbooks)

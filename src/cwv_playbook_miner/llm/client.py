@@ -47,6 +47,34 @@ class LLMError(RuntimeError):
     pass
 
 
+def _with_retry(fn, retries: int = 4):
+    """Retries on transient network/server errors (connection blips, 5xx,
+    429, timeouts) with exponential backoff -- observed live this session
+    (HTTP/2 stream-cancel, HTTP 504) crashing a whole batch for what turned
+    out to be a one-off hiccup. Does NOT retry a clear 4xx client error
+    (bad request, auth failure) -- retrying that just wastes time on
+    something a retry can't fix."""
+    import time as _time
+    last_err: Exception | None = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            body = exc.response.text[:300] if exc.response is not None else ""
+            if status is not None and 400 <= status < 500 and status != 429:
+                # Not retryable (bad request, auth, etc.) -- but still wrap as
+                # LLMError so callers' `except LLMError` actually catches it,
+                # per complete_json/complete_text's documented contract.
+                raise LLMError(f"HTTP {status}: {body}") from exc
+            last_err = exc
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            last_err = exc
+        if attempt < retries - 1:
+            _time.sleep(2 ** attempt)
+    raise LLMError(f"request failed after {retries} attempts: {last_err}") from last_err
+
+
 def _call_openai(system: str, user: str, model: str | None, timeout: int) -> str:
     _ensure_env_loaded()
     api_key = os.environ.get("OPENAI_API_KEY")
@@ -121,14 +149,14 @@ def complete_json(
     Raises LLMError on any failure -- callers decide whether to skip/retry."""
     _ensure_env_loaded()
     if backend == "openai":
-        raw = _call_openai(system, user, model, timeout)
+        raw = _with_retry(lambda: _call_openai(system, user, model, timeout))
     elif backend == "claude-cli":
         raw = _call_claude_cli(system, user, timeout)
     elif backend == "openai-compatible":
         base_url = base_url or os.environ.get("LLM_BASE_URL", "http://localhost:8000/v1")
         api_key = api_key or os.environ.get("LLM_API_KEY", "EMPTY")
         model = model or os.environ.get("LLM_MODEL_NAME", "")
-        raw = _call_openai_compatible(system, user, base_url, api_key, model, timeout)
+        raw = _with_retry(lambda: _call_openai_compatible(system, user, base_url, api_key, model, timeout))
     else:
         raise LLMError(f"unknown backend {backend!r}")
 
@@ -150,36 +178,42 @@ def complete_text(
         if not api_key_:
             raise LLMError("OPENAI_API_KEY not set (add it to .env or export it) -- see .env.example")
         model = model or os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
-        resp = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key_}"},
-            json={
-                "model": model,
-                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                "temperature": 0.2,
-            },
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+
+        def _do():
+            resp = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key_}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                    "temperature": 0.2,
+                },
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+        return _with_retry(_do)
     elif backend == "claude-cli":
         return _call_claude_cli_text(system, user, timeout)
     elif backend == "openai-compatible":
         base_url = base_url or os.environ.get("LLM_BASE_URL", "http://localhost:8000/v1")
         api_key = api_key or os.environ.get("LLM_API_KEY", "EMPTY")
         model = model or os.environ.get("LLM_MODEL_NAME", "")
-        resp = requests.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json={
-                "model": model,
-                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                "temperature": 0.2,
-            },
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+
+        def _do():
+            resp = requests.post(
+                f"{base_url.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                    "temperature": 0.2,
+                },
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+        return _with_retry(_do)
     raise LLMError(f"unknown backend {backend!r}")
 
 
