@@ -76,13 +76,17 @@ and — a hard gate, not a hint — `cwv_relevant`, using real evidence rather
 than a handful of short phrases.
 
 ### 6 — Generate
-Draft → critic → **grounding check**. Evidence selection is diversity-
-weighted (caps any single repo's contribution) so one codebase's repeated
-pattern can't single-handedly validate a technique. Draft and critic write
-against the curated format spec and two style references; the grounding
-pass then verifies every concrete claim — especially anti-pattern "why
-this is bad" reasoning — actually traces to a cited PR rather than
-sounding-plausible invention.
+Draft → critic → **grounding check** → **AEM-fidelity check**. Evidence
+selection is diversity-weighted (caps any single repo's contribution) so
+one codebase's repeated pattern can't single-handedly validate a
+technique. Draft and critic write against the curated format spec and two
+style references; the grounding pass then verifies every concrete claim —
+especially anti-pattern "why this is bad" reasoning — actually traces to a
+cited PR rather than sounding-plausible invention. The AEM-fidelity pass
+runs last: source PRs are ordinary web code, so a draft can carry over a
+React/Vue example verbatim — this dedicated check rewrites any code
+example that isn't genuinely native to the flavor(s) it's claimed for
+(`decorate(block)` for eds, HTL/Sling Models/clientlib for cs/ams).
 
 ## Results
 

@@ -1,126 +1,161 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1580 220" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
-  <style>
-    .bg { fill: #ffffff; }
-    .card { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1; }
-    .badge { fill: #0969da; }
-    .badge-text { fill: #ffffff; font-weight: 700; font-size: 13px; }
-    .stage { fill: #1f2328; font-weight: 700; font-size: 15px; }
-    .job { fill: #57606a; font-size: 11px; }
-    .stat { fill: #0969da; font-weight: 800; font-size: 22px; }
-    .stat-small { fill: #0969da; font-weight: 800; font-size: 15px; }
-    .stat-label { fill: #57606a; font-size: 10px; }
-    .arrow { stroke: #8c959f; stroke-width: 2; fill: none; }
-    .arrowhead { fill: #8c959f; }
-    .title { fill: #1f2328; font-weight: 700; font-size: 16px; }
-    .foot { fill: #57606a; font-size: 12px; }
-  </style>
-
-  <rect class="bg" x="0" y="0" width="1580" height="220"/>
-
-  <text class="title" x="0" y="24">cwv-playbook-miner pipeline</text>
-
-  <!-- 1. SOURCE -->
-  <g transform="translate(0,50)">
-    <rect class="card" x="0" y="0" width="220" height="120" rx="10"/>
-    <circle class="badge" cx="24" cy="24" r="14"/>
-    <text class="badge-text" x="24" y="29" text-anchor="middle">1</text>
-    <text class="stage" x="46" y="29">Source</text>
-    <text class="job" x="16" y="52">Scan GH Archive for merged</text>
-    <text class="job" x="16" y="66">PRs with a measured or human-</text>
-    <text class="job" x="16" y="80">flagged performance signal</text>
-    <text class="stat" x="16" y="107">14,965</text>
-    <text class="stat-label" x="16" y="118">source records</text>
-  </g>
-
-  <g transform="translate(220,110)">
-    <line class="arrow" x1="4" y1="0" x2="38" y2="0"/>
-    <path class="arrowhead" d="M 38 0 L 30 -5 L 30 5 Z"/>
-  </g>
-
-  <!-- 2. ENRICH -->
-  <g transform="translate(266,50)">
-    <rect class="card" x="0" y="0" width="220" height="120" rx="10"/>
-    <circle class="badge" cx="24" cy="24" r="14"/>
-    <text class="badge-text" x="24" y="29" text-anchor="middle">2</text>
-    <text class="stage" x="46" y="29">Enrich</text>
-    <text class="job" x="16" y="52">Backfill title, body, comments</text>
-    <text class="job" x="16" y="66">and reviews via GitHub GraphQL</text>
-    <text class="job" x="16" y="80">— GH Archive omits these</text>
-    <text class="stat" x="16" y="107">14,919</text>
-    <text class="stat-label" x="16" y="118">with real text (99.7%)</text>
-  </g>
-
-  <g transform="translate(486,110)">
-    <line class="arrow" x1="4" y1="0" x2="38" y2="0"/>
-    <path class="arrowhead" d="M 38 0 L 30 -5 L 30 5 Z"/>
-  </g>
-
-  <!-- 3. EXTRACT -->
-  <g transform="translate(532,50)">
-    <rect class="card" x="0" y="0" width="220" height="120" rx="10"/>
-    <circle class="badge" cx="24" cy="24" r="14"/>
-    <text class="badge-text" x="24" y="29" text-anchor="middle">3</text>
-    <text class="stage" x="46" y="29">Extract</text>
-    <text class="job" x="16" y="52">Judge CWV relevance (LCP,</text>
-    <text class="job" x="16" y="66">CLS, INP) first, then extract</text>
-    <text class="job" x="16" y="80">technique, mechanism, phase</text>
-    <text class="stat" x="16" y="107">4,163</text>
-    <text class="stat-label" x="16" y="118">CWV-motivated (27.8%)</text>
-  </g>
-
-  <g transform="translate(752,110)">
-    <line class="arrow" x1="4" y1="0" x2="38" y2="0"/>
-    <path class="arrowhead" d="M 38 0 L 30 -5 L 30 5 Z"/>
-  </g>
-
-  <!-- 4. ROUTE -->
-  <g transform="translate(798,50)">
-    <rect class="card" x="0" y="0" width="220" height="120" rx="10"/>
-    <circle class="badge" cx="24" cy="24" r="14"/>
-    <text class="badge-text" x="24" y="29" text-anchor="middle">4</text>
-    <text class="stage" x="46" y="29">Route</text>
-    <text class="job" x="16" y="52">Retrieve top candidates by</text>
-    <text class="job" x="16" y="66">embedding, then an LLM verifies</text>
-    <text class="job" x="16" y="80">against the real playbook text</text>
-    <text class="stat-small" x="16" y="105">1,861 existing</text>
-    <text class="stat-small" x="16" y="122">2,302 novel</text>
-  </g>
-
-  <g transform="translate(1018,110)">
-    <line class="arrow" x1="4" y1="0" x2="38" y2="0"/>
-    <path class="arrowhead" d="M 38 0 L 30 -5 L 30 5 Z"/>
-  </g>
-
-  <!-- 5. CLUSTER -->
-  <g transform="translate(1064,50)">
-    <rect class="card" x="0" y="0" width="220" height="120" rx="10"/>
-    <circle class="badge" cx="24" cy="24" r="14"/>
-    <text class="badge-text" x="24" y="29" text-anchor="middle">5</text>
-    <text class="stage" x="46" y="29">Cluster</text>
-    <text class="job" x="16" y="52">HDBSCAN groups the novel</text>
-    <text class="job" x="16" y="66">pool, then a coherence check</text>
-    <text class="job" x="16" y="80">confirms each group is real</text>
-    <text class="stat" x="16" y="107">9</text>
-    <text class="stat-label" x="16" y="118">confirmed (of 72 raw)</text>
-  </g>
-
-  <g transform="translate(1284,110)">
-    <line class="arrow" x1="4" y1="0" x2="38" y2="0"/>
-    <path class="arrowhead" d="M 38 0 L 30 -5 L 30 5 Z"/>
-  </g>
-
-  <!-- 6. GENERATE -->
-  <g transform="translate(1330,50)">
-    <rect class="card" x="0" y="0" width="220" height="120" rx="10"/>
-    <circle class="badge" cx="24" cy="24" r="14"/>
-    <text class="badge-text" x="24" y="29" text-anchor="middle">6</text>
-    <text class="stage" x="46" y="29">Generate</text>
-    <text class="job" x="16" y="52">Draft, AEM-architect critic,</text>
-    <text class="job" x="16" y="66">then a grounding check against</text>
-    <text class="job" x="16" y="80">the real cited evidence</text>
-    <text class="stat" x="16" y="107">26</text>
-    <text class="stat-label" x="16" y="118">playbook files</text>
-  </g>
-
-  <text class="foot" x="0" y="200">Every decision runs on real PR text (title / body / diff / comments) — never a short phrase, never a bare threshold.</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1694 344" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif">
+<defs>
+<filter id="cardShadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="3" stdDeviation="7" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+<filter id="badgeShadow" x="-60%" y="-60%" width="220%" height="220%">
+        <feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#0f172a" flood-opacity="0.28"/>
+    </filter>
+<linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#2563eb"/>
+            <stop offset="100%" stop-color="#1d4ed8"/>
+        </linearGradient>
+<linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#0d9488"/>
+            <stop offset="100%" stop-color="#0f766e"/>
+        </linearGradient>
+<linearGradient id="grad3" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#7c3aed"/>
+            <stop offset="100%" stop-color="#6d28d9"/>
+        </linearGradient>
+<linearGradient id="grad4" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#d97706"/>
+            <stop offset="100%" stop-color="#b45309"/>
+        </linearGradient>
+<linearGradient id="grad5" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#e11d48"/>
+            <stop offset="100%" stop-color="#be123c"/>
+        </linearGradient>
+<linearGradient id="grad6" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#16a34a"/>
+            <stop offset="100%" stop-color="#15803d"/>
+        </linearGradient>
+<linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#fbfcfe"/>
+        <stop offset="100%" stop-color="#f3f5f9"/>
+    </linearGradient>
+</defs>
+<rect x="0" y="0" width="1694" height="344" fill="url(#bgGrad)"/>
+<text x="30" y="34" font-size="21" font-weight="800" fill="#0f172a" letter-spacing="-0.3">cwv-playbook-miner pipeline</text>
+<text x="30" y="58" font-size="13" fill="#64748b">5-year GH Archive backfill (2021&#8211;2026) &#8594; 26 evidence-grounded playbook candidates, every stage traced back to real PR text</text>
+<g transform="translate(30,92)">
+<rect x="0" y="0" width="244" height="176" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" filter="url(#cardShadow)"/>
+<rect x="0" y="0" width="244" height="6" rx="3" fill="url(#grad1)"/>
+<rect x="0" y="3" width="244" height="6" fill="url(#grad1)"/>
+<circle cx="30" cy="40" r="17" fill="url(#grad1)" filter="url(#badgeShadow)"/>
+<text x="30" y="45.5" font-size="15" font-weight="800" fill="#ffffff" text-anchor="middle">1</text>
+<circle cx="216" cy="28" r="6" fill="none" stroke="#2563eb" stroke-width="2"/>
+        <line x1="220.2" y1="32.2" x2="224.5" y2="36.5" stroke="#2563eb" stroke-width="2" stroke-linecap="round"/>
+<text x="58" y="45" font-size="17" font-weight="800" fill="#0f172a">Source</text>
+<text x="18" y="72" font-size="11.3" fill="#64748b">Scan GH Archive for merged PRs</text>
+<text x="18" y="87.5" font-size="11.3" fill="#64748b">carrying a measured or human-</text>
+<text x="18" y="103.0" font-size="11.3" fill="#64748b">flagged performance signal</text>
+<line x1="18" y1="128" x2="226" y2="128" stroke="#eef1f5" stroke-width="1.5"/>
+<text x="18" y="157" font-size="24" font-weight="800" fill="#2563eb">14,965</text>
+<text x="18" y="174" font-size="10.5" fill="#94a3b8">source records</text>
+</g>
+<g transform="translate(308,92)">
+<rect x="0" y="0" width="244" height="176" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" filter="url(#cardShadow)"/>
+<rect x="0" y="0" width="244" height="6" rx="3" fill="url(#grad2)"/>
+<rect x="0" y="3" width="244" height="6" fill="url(#grad2)"/>
+<circle cx="30" cy="40" r="17" fill="url(#grad2)" filter="url(#badgeShadow)"/>
+<text x="30" y="45.5" font-size="15" font-weight="800" fill="#ffffff" text-anchor="middle">2</text>
+<rect x="212" y="23" width="12" height="14" rx="2" fill="none" stroke="#0d9488" stroke-width="2"/>
+        <line x1="218" y1="27.5" x2="218" y2="32.5" stroke="#0d9488" stroke-width="2" stroke-linecap="round"/>
+        <line x1="215.5" y1="30" x2="220.5" y2="30" stroke="#0d9488" stroke-width="2" stroke-linecap="round"/>
+<text x="58" y="45" font-size="17" font-weight="800" fill="#0f172a">Enrich</text>
+<text x="18" y="72" font-size="11.3" fill="#64748b">Backfill title, body, comments</text>
+<text x="18" y="87.5" font-size="11.3" fill="#64748b">and reviews via GitHub GraphQL</text>
+<text x="18" y="103.0" font-size="11.3" fill="#64748b">— GH Archive omits these</text>
+<line x1="18" y1="128" x2="226" y2="128" stroke="#eef1f5" stroke-width="1.5"/>
+<text x="18" y="157" font-size="24" font-weight="800" fill="#0d9488">14,919</text>
+<text x="18" y="174" font-size="10.5" fill="#94a3b8">with real text (99.7%)</text>
+</g>
+<g transform="translate(586,92)">
+<rect x="0" y="0" width="244" height="176" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" filter="url(#cardShadow)"/>
+<rect x="0" y="0" width="244" height="6" rx="3" fill="url(#grad3)"/>
+<rect x="0" y="3" width="244" height="6" fill="url(#grad3)"/>
+<circle cx="30" cy="40" r="17" fill="url(#grad3)" filter="url(#badgeShadow)"/>
+<text x="30" y="45.5" font-size="15" font-weight="800" fill="#ffffff" text-anchor="middle">3</text>
+<path d="M 210 24 L 226 24 L 220.5 32 L 220.5 37 L 215.5 37 L 215.5 32 Z"
+        fill="none" stroke="#7c3aed" stroke-width="2" stroke-linejoin="round"/>
+<text x="58" y="45" font-size="17" font-weight="800" fill="#0f172a">Extract</text>
+<text x="18" y="72" font-size="11.3" fill="#64748b">Judge CWV relevance first, then</text>
+<text x="18" y="87.5" font-size="11.3" fill="#64748b">extract technique, mechanism</text>
+<text x="18" y="103.0" font-size="11.3" fill="#64748b">&#38; affected resource — real facts</text>
+<line x1="18" y1="128" x2="226" y2="128" stroke="#eef1f5" stroke-width="1.5"/>
+<text x="18" y="157" font-size="24" font-weight="800" fill="#7c3aed">4,163</text>
+<text x="18" y="174" font-size="10.5" fill="#94a3b8">CWV-motivated (27.8%)</text>
+</g>
+<g transform="translate(864,92)">
+<rect x="0" y="0" width="244" height="176" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" filter="url(#cardShadow)"/>
+<rect x="0" y="0" width="244" height="6" rx="3" fill="url(#grad4)"/>
+<rect x="0" y="3" width="244" height="6" fill="url(#grad4)"/>
+<circle cx="30" cy="40" r="17" fill="url(#grad4)" filter="url(#badgeShadow)"/>
+<text x="30" y="45.5" font-size="15" font-weight="800" fill="#ffffff" text-anchor="middle">4</text>
+<line x1="212" y1="24" x2="218" y2="30" stroke="#d97706" stroke-width="2" stroke-linecap="round"/>
+        <line x1="212" y1="36" x2="218" y2="30" stroke="#d97706" stroke-width="2" stroke-linecap="round"/>
+        <line x1="218" y1="30" x2="226" y2="30" stroke="#d97706" stroke-width="2" stroke-linecap="round"/>
+        <path d="M 226 30 L 221 26.5 L 221 33.5 Z" fill="#d97706"/>
+<text x="58" y="45" font-size="17" font-weight="800" fill="#0f172a">Route</text>
+<text x="18" y="72" font-size="11.3" fill="#64748b">Embedding pre-filter, then an LLM</text>
+<text x="18" y="87.5" font-size="11.3" fill="#64748b">verifies against full playbook text</text>
+<text x="18" y="103.0" font-size="11.3" fill="#64748b">— match or novel, never a threshold</text>
+<line x1="18" y1="128" x2="226" y2="128" stroke="#eef1f5" stroke-width="1.5"/>
+<text x="18" y="157" font-size="18" font-weight="800" fill="#d97706">1,861 / 2,302</text>
+<text x="18" y="174" font-size="10.5" fill="#94a3b8">matched / novel</text>
+</g>
+<g transform="translate(1142,92)">
+<rect x="0" y="0" width="244" height="176" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" filter="url(#cardShadow)"/>
+<rect x="0" y="0" width="244" height="6" rx="3" fill="url(#grad5)"/>
+<rect x="0" y="3" width="244" height="6" fill="url(#grad5)"/>
+<circle cx="30" cy="40" r="17" fill="url(#grad5)" filter="url(#badgeShadow)"/>
+<text x="30" y="45.5" font-size="15" font-weight="800" fill="#ffffff" text-anchor="middle">5</text>
+<circle cx="212" cy="26" r="3" fill="#e11d48"/>
+        <circle cx="224" cy="26" r="3" fill="#e11d48"/>
+        <circle cx="218" cy="36" r="3" fill="#e11d48"/>
+        <line x1="212" y1="26" x2="218" y2="36" stroke="#e11d48" stroke-width="1.5"/>
+        <line x1="224" y1="26" x2="218" y2="36" stroke="#e11d48" stroke-width="1.5"/>
+        <line x1="212" y1="26" x2="224" y2="26" stroke="#e11d48" stroke-width="1.5"/>
+<text x="58" y="45" font-size="17" font-weight="800" fill="#0f172a">Cluster</text>
+<text x="18" y="72" font-size="11.3" fill="#64748b">HDBSCAN groups the novel pool,</text>
+<text x="18" y="87.5" font-size="11.3" fill="#64748b">then a dedicated pass verifies each</text>
+<text x="18" y="103.0" font-size="11.3" fill="#64748b">cluster is genuinely one technique</text>
+<line x1="18" y1="128" x2="226" y2="128" stroke="#eef1f5" stroke-width="1.5"/>
+<text x="18" y="157" font-size="18" font-weight="800" fill="#e11d48">75 → 20</text>
+<text x="18" y="174" font-size="10.5" fill="#94a3b8">raw → coherent clusters</text>
+</g>
+<g transform="translate(1420,92)">
+<rect x="0" y="0" width="244" height="176" rx="14" fill="#ffffff" stroke="#e2e8f0" stroke-width="1" filter="url(#cardShadow)"/>
+<rect x="0" y="0" width="244" height="6" rx="3" fill="url(#grad6)"/>
+<rect x="0" y="3" width="244" height="6" fill="url(#grad6)"/>
+<circle cx="30" cy="40" r="17" fill="url(#grad6)" filter="url(#badgeShadow)"/>
+<text x="30" y="45.5" font-size="15" font-weight="800" fill="#ffffff" text-anchor="middle">6</text>
+<circle cx="218" cy="30" r="9" fill="none" stroke="#16a34a" stroke-width="2"/>
+        <path d="M 214 30 L 217 33.5 L 222.5 26.5" fill="none" stroke="#16a34a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="58" y="45" font-size="17" font-weight="800" fill="#0f172a">Generate</text>
+<text x="18" y="72" font-size="11.3" fill="#64748b">Draft → critic → grounding check</text>
+<text x="18" y="87.5" font-size="11.3" fill="#64748b">→ AEM-fidelity check — every claim</text>
+<text x="18" y="103.0" font-size="11.3" fill="#64748b">and code example verified in turn</text>
+<line x1="18" y1="128" x2="226" y2="128" stroke="#eef1f5" stroke-width="1.5"/>
+<text x="18" y="157" font-size="24" font-weight="800" fill="#16a34a">26</text>
+<text x="18" y="174" font-size="10.5" fill="#94a3b8">playbook files</text>
+</g>
+<defs><linearGradient id="arrow0" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#2563eb" stop-opacity="0.55"/><stop offset="100%" stop-color="#0d9488" stop-opacity="0.85"/></linearGradient></defs>
+<line x1="277" y1="180.0" x2="297" y2="180.0" stroke="url(#arrow0)" stroke-width="2.5" stroke-linecap="round"/>
+<path d="M 297 175.0 L 307 180.0 L 297 185.0 Z" fill="#0d9488" fill-opacity="0.85"/>
+<defs><linearGradient id="arrow1" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#0d9488" stop-opacity="0.55"/><stop offset="100%" stop-color="#7c3aed" stop-opacity="0.85"/></linearGradient></defs>
+<line x1="555" y1="180.0" x2="575" y2="180.0" stroke="url(#arrow1)" stroke-width="2.5" stroke-linecap="round"/>
+<path d="M 575 175.0 L 585 180.0 L 575 185.0 Z" fill="#7c3aed" fill-opacity="0.85"/>
+<defs><linearGradient id="arrow2" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#7c3aed" stop-opacity="0.55"/><stop offset="100%" stop-color="#d97706" stop-opacity="0.85"/></linearGradient></defs>
+<line x1="833" y1="180.0" x2="853" y2="180.0" stroke="url(#arrow2)" stroke-width="2.5" stroke-linecap="round"/>
+<path d="M 853 175.0 L 863 180.0 L 853 185.0 Z" fill="#d97706" fill-opacity="0.85"/>
+<defs><linearGradient id="arrow3" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#d97706" stop-opacity="0.55"/><stop offset="100%" stop-color="#e11d48" stop-opacity="0.85"/></linearGradient></defs>
+<line x1="1111" y1="180.0" x2="1131" y2="180.0" stroke="url(#arrow3)" stroke-width="2.5" stroke-linecap="round"/>
+<path d="M 1131 175.0 L 1141 180.0 L 1131 185.0 Z" fill="#e11d48" fill-opacity="0.85"/>
+<defs><linearGradient id="arrow4" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#e11d48" stop-opacity="0.55"/><stop offset="100%" stop-color="#16a34a" stop-opacity="0.85"/></linearGradient></defs>
+<line x1="1389" y1="180.0" x2="1409" y2="180.0" stroke="url(#arrow4)" stroke-width="2.5" stroke-linecap="round"/>
+<path d="M 1409 175.0 L 1419 180.0 L 1409 185.0 Z" fill="#16a34a" fill-opacity="0.85"/>
+<line x1="30" y1="296" x2="1664" y2="296" stroke="#e2e8f0" stroke-width="1"/>
+<text x="30" y="318" font-size="11.5" fill="#94a3b8">Every stage after sourcing runs on real PR context &#8212; title, body, diff, comments, reviews &#8212; never a lossy proxy.</text>
 </svg>

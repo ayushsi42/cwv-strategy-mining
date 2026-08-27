@@ -41,7 +41,7 @@ mentioned performance in plain text, with no bot-parsed number required.
 | `source/` | `perf_improvement.jsonl`, `perf_decrease.jsonl`, `perf_flagged.jsonl` | Raw mined PR records — repo, PR number, signal type, bot-parsed metric (when available), title, body, diff patches, and every issue comment/review/inline review comment backfilled via GitHub GraphQL |
 | `patterns/` | `extractions.jsonl` | Per-PR technique extraction: `technique`, `mechanism`, `affected_resource`, `render_phase`, `description`, inferred `direction` (for human-flagged PRs) — only for PRs that passed the CWV-relevance gate |
 | `aggregation/` | `routing.jsonl`, `novel_clusters.jsonl`, `enrichments.jsonl`, `playbook_facts.jsonl` | Routing decisions (existing playbook match vs. novel), coherence-verified novel-technique clusters, diversity-weighted existing-playbook evidence, and the same fact-shape extracted from the 20 curated playbooks |
-| `playbooks/new_playbooks/` | 9 `.md` files | Full new `{issue_type}.md` candidates — front matter includes `source_prs`, draft → critic → grounding-checked |
+| `playbooks/new_playbooks/` | 9 `.md` files | Full new `{issue_type}.md` candidates — front matter includes `source_prs`, draft → critic → grounding-checked → AEM-fidelity-checked |
 | `playbooks/enriched/` | 17 `.enrichment.md` files | New approach/anti-pattern subsection(s) for an existing playbook — no front matter (spliced body content), grounding noted via a `> **Source PRs**` line instead |
 
 ### `source/*.jsonl` schema
@@ -124,7 +124,9 @@ Full run over the 5-year backfilled source corpus (2021–2026):
 5. **Cluster:** HDBSCAN groups the novel pool, then a dedicated coherence-
    verification call reads full evidence per candidate cluster and rejects
    anything that isn't genuinely one technique before it's ever labeled.
-6. **Generate:** draft → critic → grounding check, with diversity-weighted
+6. **Generate:** draft → critic → grounding check → AEM-fidelity check
+   (rewrites any code example that isn't genuinely native to its claimed
+   AEM flavor, e.g. a carried-over React example), with diversity-weighted
    evidence selection so one repo can't dominate a technique's evidence.
 
 ## License
