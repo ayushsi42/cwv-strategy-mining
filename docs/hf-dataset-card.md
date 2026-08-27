@@ -131,6 +131,40 @@ Full run over the 5-year backfilled source corpus (2021–2026):
    AEM flavor, e.g. a carried-over React example), with diversity-weighted
    evidence selection so one repo can't dominate a technique's evidence.
 
+## Experiment specifications
+
+**Models** (Azure OpenAI, `openai-compatible` backend): chat completion
+`gpt-5.4-mini` for every LLM stage (relevance, extraction, routing verify,
+coherence, labeling, draft/critic/grounding/AEM-fidelity); text embedding
+`text-embedding-3-small` for routing's pre-filter and clustering's
+HDBSCAN input. Both verified as actually deployed and callable on the
+Azure Foundry resource before the run — `gpt-5` (the `.env` deployment
+name) and `text-embedding-ada-002` are not callable despite being listed
+in the model catalog.
+
+**Call parameters**: `temperature=0.0` for structured/JSON calls
+(relevance, extraction, routing verify, coherence, labeling),
+`temperature=0.2` for free-text generation calls (draft, critic,
+grounding check, AEM-fidelity check). Transient network/5xx/429 errors
+retry up to 4 times with exponential backoff; a real 4xx is never
+retried.
+
+**Batching**: `BATCH_SIZE=10` records/call for extraction, `VERIFY_BATCH_
+SIZE=6` for routing verify, `BATCH_SIZE=40` PRs/request for GitHub
+GraphQL enrichment, `CLUSTER_CALL_BATCH_SIZE=4` clusters/call for
+coherence-verification and labeling (an unbatched 72-cluster call
+measured ~2M characters / ~508K tokens and hit an HTTP 400).
+
+**Routing**: embedding pre-filter narrows each PR to its top `TOP_K=3`
+candidate existing playbooks by cosine similarity before an LLM verifies
+against their full text.
+
+**Clustering**: `sklearn.cluster.HDBSCAN(min_cluster_size=4,
+min_samples=2)` on L2-normalized embeddings; a cluster also needs
+`distinct_repo_count >= 2` to reach the coherence-verification call.
+
+**Timeout**: 180s per LLM call.
+
 ## License
 
 MIT for this dataset's structure/derived content. Source PR text (titles,

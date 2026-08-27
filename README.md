@@ -105,6 +105,62 @@ Full run over the 5-year backfilled source corpus (2021–2026):
 | Existing playbooks enriched with new evidence | 17 |
 | **Generated playbook files** | **26** |
 
+## Experiment specifications
+
+Exact configuration behind the numbers above.
+
+**Models** (Azure OpenAI, `openai-compatible` backend, `/openai/v1` path):
+
+| Role | Model | Used by |
+|---|---|---|
+| Chat completion | `gpt-5.4-mini` | every LLM stage — relevance, extraction, routing verify, coherence, labeling, draft/critic/grounding/AEM-fidelity |
+| Text embedding | `text-embedding-3-small` | routing's pre-filter, clustering's HDBSCAN input |
+
+Both were verified as actually deployed and callable on the Azure Foundry
+resource before the run (the `/models` catalog lists 452 entries, most not
+callable — `gpt-5.4`/`gpt-5.4-mini` and `text-embedding-3-small`/`-large`
+work; `gpt-5` and `text-embedding-ada-002` do not, despite `gpt-5` being
+the deployment name in `.env`). `--backend openai` (plain OpenAI) and
+`--backend claude-cli` are also supported for any stage.
+
+**Call parameters** (`llm/client.py`): `temperature=0.0` for every
+structured/JSON call (relevance, extraction, routing verify, coherence,
+labeling — determinism matters more than variety when the output is a
+judgment), `temperature=0.2` for free-text generation calls (draft,
+critic, grounding check, AEM-fidelity check). Every call retries
+transient network/5xx/429 errors up to 4 times with exponential backoff;
+a real 4xx is never retried, always raised as `LLMError`.
+
+**Batching**: extraction and routing-verify batch records for throughput
+(`BATCH_SIZE=10` for extraction, `VERIFY_BATCH_SIZE=6` for routing verify,
+`BATCH_SIZE=40` PRs/request for GraphQL enrichment via query aliases);
+clustering's coherence/labeling calls batch `CLUSTER_CALL_BATCH_SIZE=4`
+clusters per call — found necessary after an unbatched 72-cluster call
+measured ~2M characters (~508K tokens) and hit an HTTP 400.
+
+**Routing**: embedding pre-filter narrows each PR to its `TOP_K=3`
+candidate existing playbooks by cosine similarity before the LLM verifies
+against their full text — the embedding score is never the routing
+decision itself.
+
+**Clustering**: `sklearn.cluster.HDBSCAN(min_cluster_size=4, min_samples=2)`
+on L2-normalized embeddings; a cluster additionally needs
+`distinct_repo_count >= 2` to survive size/repo eligibility before the
+coherence-verification call ever sees it.
+
+**Timeouts**: 180s per LLM call (`--timeout`, all stages) unless
+overridden.
+
+**Compute environment**: the 14,965-record enrichment pass (GitHub
+GraphQL title/body/comments/reviews backfill) took ~35 minutes wall time,
+most of it the `perf_flagged` file (~8,500 records); it includes its own
+retry-with-backoff for transient `gh api graphql` failures, separate from
+the LLM client's. No end-to-end wall-clock or dollar-cost figure was
+recorded for the full extract → route → cluster → generate run on this
+architecture — the effort estimate from an earlier, structurally
+different single-pass design (~$4-6 for the equivalent corpus) does not
+carry over and isn't repeated here.
+
 ## Setup
 
 ```bash
@@ -135,15 +191,15 @@ cwv-playbook-miner refetch-truncated
 cwv-playbook-miner extract --backend openai-compatible --model gpt-5.4-mini
 cwv-playbook-miner extract-playbooks --backend openai-compatible --model gpt-5.4-mini
 cwv-playbook-miner route --backend openai-compatible --model gpt-5.4-mini \
-  --embed-provider openai-compatible --embed-model text-embedding-3-large
+  --embed-provider openai-compatible --embed-model text-embedding-3-small
 cwv-playbook-miner cluster --backend openai-compatible --model gpt-5.4-mini \
-  --embed-provider openai-compatible --embed-model text-embedding-3-large
+  --embed-provider openai-compatible --embed-model text-embedding-3-small
 cwv-playbook-miner enrich-extract
 cwv-playbook-miner generate --backend openai-compatible --model gpt-5.4-mini
 
 # Or chain everything
 cwv-playbook-miner playbooks --backend openai-compatible --model gpt-5.4-mini \
-  --embed-provider openai-compatible --embed-model text-embedding-3-large
+  --embed-provider openai-compatible --embed-model text-embedding-3-small
 ```
 
 `--workers` controls sourcing/extraction thread-pool size. `extract`,
