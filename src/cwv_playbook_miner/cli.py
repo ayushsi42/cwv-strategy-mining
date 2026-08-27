@@ -520,7 +520,263 @@ def build_parser() -> argparse.ArgumentParser:
     _add_llm_args(p)
     p.set_defaults(func=cmd_run_all)
 
+    # -----------------------------------------------------------------------
+    # AEM-playbook pipeline (triage → cluster/enrich → generate-playbooks)
+    # -----------------------------------------------------------------------
+    _HANDOFF_HELP = "path to cwv-playbooks-handoff dir (default: cwv-playbooks-handoff)"
+    _OUTPUT_HELP = "output dir for generated playbooks (default: playbooks/)"
+
+    p = sub.add_parser("triage", help="[AEM] stage 1: summarise records, embed, route against existing playbooks")
+    p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF_HELP)
+    p.add_argument("--high-threshold", type=float, default=0.78, help="cosine sim → existing playbook")
+    p.add_argument("--low-threshold", type=float, default=0.45, help="cosine sim → novel pool")
+    p.add_argument("--workers", type=int, default=8, help="parallel summarisation workers")
+    p.add_argument("--no-cache", action="store_true", help="ignore cached summaries")
+    _add_llm_args(p)
+    _add_embed_args(p)
+    p.set_defaults(func=cmd_triage)
+
+    p = sub.add_parser("semantic-cluster", help="[AEM] stage 2b: HDBSCAN clustering of novel pool")
+    p.add_argument("--min-cluster-size", type=int, default=4)
+    _add_llm_args(p)
+    _add_embed_args(p)
+    p.set_defaults(func=cmd_semantic_cluster)
+
+    p = sub.add_parser("enrich-extract", help="[AEM] stage 2a: extract enrichment evidence for existing playbooks")
+    p.set_defaults(func=cmd_enrich_extract)
+
+    p = sub.add_parser("generate-playbooks", help="[AEM] stage 3: generate new .md files and enrichment blocks")
+    p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF_HELP)
+    p.add_argument("--output-dir", default=str(PLAYBOOKS_DIR), help=_OUTPUT_HELP)
+    p.add_argument("--new-only", action="store_true", help="skip enrichment blocks, generate new playbooks only")
+    _add_llm_args(p)
+    p.set_defaults(func=cmd_generate_playbooks)
+
+    p = sub.add_parser("playbooks", help="[AEM] full chain: triage → semantic-cluster + enrich-extract → generate-playbooks")
+    p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF_HELP)
+    p.add_argument("--output-dir", default=str(PLAYBOOKS_DIR), help=_OUTPUT_HELP)
+    p.add_argument("--high-threshold", type=float, default=0.78)
+    p.add_argument("--low-threshold", type=float, default=0.45)
+    p.add_argument("--min-cluster-size", type=int, default=4)
+    p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--no-cache", action="store_true")
+    p.add_argument("--new-only", action="store_true")
+    _add_llm_args(p)
+    _add_embed_args(p)
+    p.set_defaults(func=cmd_playbooks)
+
     return parser
+
+
+# ---------------------------------------------------------------------------
+# New AEM-playbook pipeline commands (triage → semantic-cluster / enrich →
+# generate-playbooks). These replace the old extract→cluster→classify→generate
+# chain for the final submission deliverable.
+# ---------------------------------------------------------------------------
+
+HANDOFF_DIR = Path("cwv-playbooks-handoff")
+PLAYBOOKS_DIR = Path("playbooks")
+CACHE_DIR = DATA_PROCESSED / ".triage_cache"
+
+
+def _add_embed_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--embed-provider", default="openai",
+                   help="openai | openai-compatible | sentence-transformers")
+    p.add_argument("--embed-model", default=None, help="override default embedding model")
+    p.add_argument("--embed-base-url", default=None,
+                   help="base URL for openai-compatible embedding endpoint")
+
+
+def cmd_triage(args: argparse.Namespace) -> None:
+    """Stage 1: summarise all source records, embed, route against existing playbooks."""
+    from cwv_playbook_miner.triage.triage import run_triage, write_triage_jsonl
+
+    backend = args.backend or resolve_default_backend()
+    source_paths = [
+        DATA_PROCESSED / "perf_improvement.jsonl",
+        DATA_PROCESSED / "perf_decrease.jsonl",
+        DATA_PROCESSED / "perf_flagged.jsonl",
+    ]
+    handoff_dir = Path(args.handoff_dir)
+    if not handoff_dir.exists():
+        raise SystemExit(f"Handoff dir not found: {handoff_dir}. Pass --handoff-dir.")
+
+    records = run_triage(
+        source_paths,
+        handoff_dir,
+        backend=backend,
+        model=args.model,
+        embed_provider=args.embed_provider,
+        embed_model=args.embed_model,
+        embed_base_url=args.embed_base_url,
+        summarize_workers=args.workers,
+        timeout=args.timeout,
+        cache_dir=CACHE_DIR if not args.no_cache else None,
+        high_threshold=args.high_threshold,
+        low_threshold=args.low_threshold,
+    )
+
+    out = DATA_PROCESSED / "triage.jsonl"
+    write_triage_jsonl(records, out)
+    by_route: dict[str, int] = {}
+    for r in records:
+        by_route[r.route] = by_route.get(r.route, 0) + 1
+    print(f"Wrote {len(records)} triage records to {out}")
+    print(f"  existing: {by_route.get('existing', 0)}, "
+          f"novel: {by_route.get('novel', 0)}, "
+          f"drop: {by_route.get('drop', 0)}")
+
+
+def cmd_semantic_cluster(args: argparse.Namespace) -> None:
+    """Stage 2b: HDBSCAN clustering of the novel pool."""
+    from cwv_playbook_miner.triage.triage import read_triage_jsonl
+    from cwv_playbook_miner.extraction.semantic_cluster import cluster_novel_records, write_jsonl as write_clusters
+
+    backend = args.backend or resolve_default_backend()
+    triage_path = DATA_PROCESSED / "triage.jsonl"
+    if not triage_path.exists():
+        raise SystemExit(f"Run `triage` first — {triage_path} not found.")
+
+    triage_records = read_triage_jsonl(triage_path)
+
+    # Load all source PRs into a lookup dict
+    pr_by_id: dict[str, PRRecord] = {}
+    for path in [
+        DATA_PROCESSED / "perf_improvement.jsonl",
+        DATA_PROCESSED / "perf_decrease.jsonl",
+        DATA_PROCESSED / "perf_flagged.jsonl",
+    ]:
+        if path.exists():
+            for pr in read_pr_jsonl(path):
+                pr_by_id[pr.id] = pr
+
+    clusters = cluster_novel_records(
+        triage_records,
+        pr_by_id,
+        embed_provider=args.embed_provider,
+        embed_model=args.embed_model,
+        embed_base_url=args.embed_base_url,
+        backend=backend,
+        model=args.model,
+        timeout=args.timeout,
+        min_cluster_size=args.min_cluster_size,
+    )
+
+    out = DATA_PROCESSED / "novel_clusters.jsonl"
+    write_clusters(clusters, out)
+    print(f"Wrote {len(clusters)} novel clusters to {out}")
+    for c in clusters:
+        print(f"  [{c.issue_type}] {len(c.source_pr_ids)} PRs, "
+              f"{c.distinct_repo_count} repos, "
+              f"{c.directional_consistency:.0%} consistent, "
+              f"flavors={c.applicable_flavors}")
+
+
+def cmd_enrich_extract(args: argparse.Namespace) -> None:
+    """Stage 2a: extract enrichment evidence for existing playbooks."""
+    from cwv_playbook_miner.triage.triage import read_triage_jsonl
+    from cwv_playbook_miner.extraction.enrich_extract import extract_enrichments, write_jsonl as write_enrichments
+
+    triage_path = DATA_PROCESSED / "triage.jsonl"
+    if not triage_path.exists():
+        raise SystemExit(f"Run `triage` first — {triage_path} not found.")
+
+    triage_records = read_triage_jsonl(triage_path)
+
+    pr_by_id: dict[str, PRRecord] = {}
+    for path in [
+        DATA_PROCESSED / "perf_improvement.jsonl",
+        DATA_PROCESSED / "perf_decrease.jsonl",
+        DATA_PROCESSED / "perf_flagged.jsonl",
+    ]:
+        if path.exists():
+            for pr in read_pr_jsonl(path):
+                pr_by_id[pr.id] = pr
+
+    evidence = extract_enrichments(triage_records, pr_by_id)
+
+    out = DATA_PROCESSED / "enrichments.jsonl"
+    write_enrichments(evidence, out)
+    print(f"Wrote {len(evidence)} enrichment evidence records to {out}")
+
+
+def cmd_generate_playbooks(args: argparse.Namespace) -> None:
+    """Stage 3: generate new {issue_type}.md files and enrichment blocks."""
+    from cwv_playbook_miner.triage.triage import read_triage_jsonl
+    from cwv_playbook_miner.extraction.semantic_cluster import read_jsonl as read_clusters
+    from cwv_playbook_miner.extraction.enrich_extract import read_jsonl as read_enrichments
+    from cwv_playbook_miner.generation.render_playbook import (
+        render_new_playbook, render_enrichment,
+        write_playbook, write_enrichment,
+    )
+
+    backend = args.backend or resolve_default_backend()
+    handoff_dir = Path(args.handoff_dir)
+    if not handoff_dir.exists():
+        raise SystemExit(f"Handoff dir not found: {handoff_dir}")
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load PR lookup
+    pr_by_id: dict[str, PRRecord] = {}
+    for path in [
+        DATA_PROCESSED / "perf_improvement.jsonl",
+        DATA_PROCESSED / "perf_decrease.jsonl",
+        DATA_PROCESSED / "perf_flagged.jsonl",
+    ]:
+        if path.exists():
+            for pr in read_pr_jsonl(path):
+                pr_by_id[pr.id] = pr
+
+    # Generate new playbooks from novel clusters
+    clusters_path = DATA_PROCESSED / "novel_clusters.jsonl"
+    if clusters_path.exists():
+        clusters = read_clusters(clusters_path)
+        print(f"Generating {len(clusters)} new playbooks...")
+        for cluster in clusters:
+            source_prs = [pr_by_id[pid] for pid in cluster.source_pr_ids if pid in pr_by_id]
+            print(f"  [{cluster.issue_type}] {len(source_prs)} source PRs")
+            text = render_new_playbook(
+                cluster, source_prs, handoff_dir,
+                backend=backend, model=args.model, timeout=args.timeout,
+            )
+            path = write_playbook(text, cluster.issue_type, output_dir)
+            print(f"    → {path}")
+
+    # Generate enrichment blocks for existing playbooks
+    enrichments_path = DATA_PROCESSED / "enrichments.jsonl"
+    if enrichments_path.exists() and not args.new_only:
+        enrichments = read_enrichments(enrichments_path)
+        print(f"Generating {len(enrichments)} enrichment blocks...")
+        for ev in enrichments:
+            approach_prs = [pr_by_id[pid] for pid in ev.approach_pr_ids if pid in pr_by_id]
+            antipattern_prs = [pr_by_id[pid] for pid in ev.antipattern_pr_ids if pid in pr_by_id]
+            if not approach_prs and not antipattern_prs:
+                continue
+            print(f"  [{ev.playbook_id}] {len(approach_prs)} approach + "
+                  f"{len(antipattern_prs)} anti-pattern PRs")
+            text = render_enrichment(
+                ev, approach_prs, antipattern_prs, handoff_dir,
+                backend=backend, model=args.model, timeout=args.timeout,
+            )
+            path = write_enrichment(text, ev.playbook_id, output_dir)
+            print(f"    → {path}")
+
+    print(f"Done. Output in {output_dir}/")
+
+
+def cmd_playbooks(args: argparse.Namespace) -> None:
+    """Chain triage → semantic-cluster + enrich-extract → generate-playbooks."""
+    # Triage
+    args.no_cache = False
+    cmd_triage(args)
+    # Novel clustering
+    cmd_semantic_cluster(args)
+    # Enrichment evidence
+    cmd_enrich_extract(args)
+    # Generate
+    cmd_generate_playbooks(args)
 
 
 def main() -> None:
