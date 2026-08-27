@@ -8,10 +8,10 @@ cwv_metrics:
   - Lighthouse performance third-party impact
   - Lighthouse performance TBT
 source_prs:
-  - greenpeace/planet4-master-theme#2738
   - Unleash/unleash#10489
-  - pulumi/docs#18126
+  - greenpeace/planet4-master-theme#2738
   - juanequis/juanx#20
+  - pulumi/docs#18126
 required_validation:
   - third_party_script_is_not_enqueued_globally
   - third_party_script_is_inserted_only_after_window_load
@@ -247,3 +247,7 @@ Compare before and after on the same page types:
 - Some third-party widgets may require additional initialization after deferred insertion; the evidence supports the pattern, not a universal wrapper.
 - Moving a dependency into feature code can still leave the library in the bundle for pages that include the feature; the benefit is avoiding delivery on pages without it.
 - The evidence supports post-load insertion and feature scoping, but not a universal rule for all third-party resources.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (4 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **4 observations across 4 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: third-party-cost--defer-third-party-script-insertion-until-after-load`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

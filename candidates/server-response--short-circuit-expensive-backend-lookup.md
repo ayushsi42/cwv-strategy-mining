@@ -7,13 +7,15 @@ cwv_metrics:
   - TTFB
   - FCP
 source_prs:
-  - knocklabs/css_inline#11
-  - internxt/payments-server#296
   - DEFRA/ffc-ahwr-backoffice#340
+  - internxt/payments-server#296
+  - knocklabs/css_inline#11
 required_validation:
   - nesting_depth_guard_enabled
   - pathological_input_rejected_before_expensive_work
 forbidden_techniques: []
+---
+
 # Short-circuit expensive backend lookup
 
 > **Risk tier:** low · **Parent strategy:** server-response · **CWV metrics:** server latency, TTFB, FCP
@@ -239,3 +241,7 @@ Medium. The mechanism is consistent across three repositories, but the supplied 
 - Returning an immediate success response is only safe when the skipped work is truly nonessential for that request context.
 - If the expensive lookup is needed to determine authorization, billing state, or user-visible correctness, do not short-circuit unless the evidence shows a safe equivalent result.
 - The strategy is most appropriate when the bypass condition is cheap, deterministic, and validated by tests on both sides of the threshold.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **3 observations across 3 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: server-response--short-circuit-expensive-backend-lookup`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

@@ -3,7 +3,10 @@ issue_type: main-thread-computation--memoize-repeated-pure-computation
 parent_strategy: main-thread-computation
 risk_tier: low
 cwv_metrics: []
-source_prs: [reown-com/appkit#5292, commontoolsinc/labs#3899, WordPress/gutenberg#72796]
+source_prs:
+  - WordPress/gutenberg#72796
+  - commontoolsinc/labs#3899
+  - reown-com/appkit#5292
 required_validation:
   - repeated_pure_computation_identified
   - cache_invalidation_on_write_present
@@ -157,3 +160,7 @@ Do not promise a fixed CWV improvement from this strategy alone. The supplied ev
 
 ### Confidence
 - **Medium**: three observations across three repositories, with directional consistency reported as 100% and no regressions in the supplied evidence.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **3 observations across 3 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: main-thread-computation--memoize-repeated-pure-computation`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

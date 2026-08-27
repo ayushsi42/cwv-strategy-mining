@@ -8,10 +8,10 @@ cwv_metrics:
   - Lighthouse image payload / LCP image
   - image payload reduction
 source_prs:
-  - incubator-social/vopp.me#48
-  - find-my-item/FMI-FE#419
   - Molecule-AI/landingpage#27
   - arii/tech-dancer#2379
+  - find-my-item/FMI-FE#419
+  - incubator-social/vopp.me#48
 required_validation:
   - vector_artwork_is_simple_illustration_or_logo
   - raster_asset_is_replaced_by_svg_or_equivalent_vector_source
@@ -246,3 +246,7 @@ Evidence-derived inference:
 - **Support:** 4 observations across 4 repositories
 - **Directional consistency:** 100% improvements, 0 regressions
 - **Measured delta summary:** no absolute delta values were supplied
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (4 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **4 observations across 4 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: image-delivery--serve-vector-artwork-instead-of-raster-images`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

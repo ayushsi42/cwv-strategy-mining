@@ -370,15 +370,23 @@ def fetch_pr_comments(repo: str, pr_number: int) -> list[CommentHit]:
     ]
 
 
-def check_pr_merged(repo: str, pr_number: int) -> bool:
+def check_pr_merged(repo: str, pr_number: int) -> str | None:
     """Fallback merge check for the (common, documented) case where a
     comment hit's free merge event landed outside the scanned window. Only
     called for the small set of comment-hit PRs that don't already have a
     free merge event, so the `gh api` spend stays proportional to real
     candidates, not scan volume -- confirmed cheap in practice (a handful
-    of calls even for a multi-hour scan, since bot-comment hits are sparse)."""
+    of calls even for a multi-hour scan, since bot-comment hits are sparse).
+
+    Returns the PR's merged_at ISO timestamp (truthy) when merged, else None
+    -- callers checking `if check_pr_merged(...):` keep working unchanged;
+    the timestamp itself is what makes cross-year/time-series analysis over
+    the mined dataset possible at all, so it's not worth a second `gh api`
+    call just to also fetch it."""
     pr = gh_api(f"repos/{repo}/pulls/{pr_number}")
-    return bool(pr and pr.get("merged"))
+    if not pr or not pr.get("merged"):
+        return None
+    return pr.get("merged_at")
 
 
 def fetch_pr_diff(repo: str, pr_number: int) -> list[dict] | None:

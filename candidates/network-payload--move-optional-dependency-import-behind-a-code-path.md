@@ -9,11 +9,11 @@ cwv_metrics:
   - bundle size increase
   - perf_flagged
 source_prs:
-  - aws/graph-explorer#1349
-  - romunus/normalize-charset#17
-  - cowprotocol/cowswap#6338
-  - tomasondavis/react_hermes_parser#19
   - apollographql/apollo-client#12836
+  - aws/graph-explorer#1349
+  - cowprotocol/cowswap#6338
+  - romunus/normalize-charset#17
+  - tomasondavis/react_hermes_parser#19
 required_validation:
   - optional_dependency_is_not_imported_at_module_top_level
   - heavy_feature_is_only_loaded_inside_user_gated_code_path
@@ -271,3 +271,7 @@ Confidence is medium: the mechanism is repeated across multiple repositories, bu
 - Lazy loading requires a stable fallback state; without one, the UI can appear broken or empty.
 - Test environments may need explicit mocks for the optional module, as shown by the Monaco test mock.
 - The evidence supports this as a payload-reduction strategy, not as a universal performance fix for all CWV regressions.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (5 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **6 observations across 6 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: network-payload--move-optional-dependency-import-behind-a-code-path`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

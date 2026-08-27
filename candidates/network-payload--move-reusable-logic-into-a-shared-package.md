@@ -3,12 +3,18 @@ issue_type: network-payload--move-reusable-logic-into-a-shared-package
 parent_strategy: network-payload
 risk_tier: low
 cwv_metrics: [bundle_size_delta_pct]
-source_prs: [duckduckgo/autoconsent#1044, yeojz/otplib#768, elastic/kibana#230442, sunya9/mivi#294]
+source_prs:
+  - duckduckgo/autoconsent#1044
+  - elastic/kibana#230442
+  - sunya9/mivi#294
+  - yeojz/otplib#768
 required_validation:
   - shared_logic_extracted_into_reusable_module
   - call_sites_import_shared_exports_instead_of_constructing_duplicates
   - bundle_size_delta_pct_measured_before_and_after
 forbidden_techniques: []
+---
+
 # Move reusable logic into a shared package
 
 > **Risk tier:** low · **Parent strategy:** network-payload · **CWV metric:** bundle_size_delta_pct
@@ -178,3 +184,7 @@ Use the same bundle-size metric before and after the extraction.
 - A shared package can increase coupling if it becomes a dumping ground for unrelated helpers.
 - Bundle-size gains are not guaranteed; the evidence includes one regression in directional consistency, so verify the actual build artifact rather than assuming improvement.
 - The evidence supports bundle-size reduction, not a universal runtime performance improvement.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (4 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **5 observations across 5 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: network-payload--move-reusable-logic-into-a-shared-package`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

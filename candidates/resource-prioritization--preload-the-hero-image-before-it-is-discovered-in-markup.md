@@ -3,7 +3,11 @@ issue_type: resource-prioritization--preload-the-hero-image-before-it-is-discove
 parent_strategy: resource-prioritization
 risk_tier: low
 cwv_metrics: [LCP]
-source_prs: [Pinback-Team/pinback-client#207, woowacourse/perf-basecamp#161, woowacourse/perf-basecamp#178]
+source_prs:
+  - Pinback-Team/pinback-client#207
+  - katehallyal/react-native-renderer#11
+  - woowacourse/perf-basecamp#161
+  - woowacourse/perf-basecamp#178
 required_validation:
   - hero_image_is_discoverable_in_markup
   - hero_image_is_the_lcp_candidate
@@ -189,3 +193,7 @@ Do not assume a fixed improvement. The evidence supports directional validation 
 - A universal performance gain for every page.
 - A specific numeric LCP improvement.
 - A specific anti-pattern regex or forbidden code pattern.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (4 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **4 observations across 3 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: resource-prioritization--preload-the-hero-image-before-it-is-discovered-in-markup`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

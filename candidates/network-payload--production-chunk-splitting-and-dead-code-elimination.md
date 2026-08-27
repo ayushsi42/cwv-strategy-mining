@@ -7,9 +7,9 @@ cwv_metrics:
   - Lighthouse Total Blocking Time
   - Lighthouse unused JavaScript
 source_prs:
-  - yuuttana1223/web-speed-hackathon-2026#13
   - expressjs/expressjs.com#2213
   - gxcsoccer/AlphaArena#516
+  - yuuttana1223/web-speed-hackathon-2026#13
 required_validation:
   - production_build_mode_enabled
   - development_scaffolding_removed_from_shipped_bundle
@@ -230,3 +230,7 @@ Medium. The direction is consistent across three repositories, but the measured 
 - Removing development scaffolding is only safe when the shipped bundle does not depend on it.
 - Isolating large libraries helps only when those libraries are truly optional or non-critical for initial render.
 - The supplied evidence does not justify universal browser support claims, fixed percentage gains, or blanket recommendations to split every vendor package.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **3 observations across 3 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: network-payload--production-chunk-splitting-and-dead-code-elimination`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

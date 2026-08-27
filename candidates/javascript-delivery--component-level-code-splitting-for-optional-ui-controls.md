@@ -8,8 +8,9 @@ cwv_metrics:
   - Lighthouse JavaScript reduction
   - Lighthouse JavaScript payload
 source_prs:
-  - storyblok/monoblok#246
   - mieweb/ui#187
+  - storyblok/monoblok#246
+  - vlossom-ui/vlossom#155
 required_validation:
   - optional_entry_point_import_used
   - package_exports_expose_separate_subpath_entry_points
@@ -199,3 +200,7 @@ Do not assume a fixed improvement amount; the supplied evidence reports directio
 - Each optional entry point introduces package surface area that must be documented and maintained.
 - Optional dependencies must remain aligned with the split feature; otherwise consumers may encounter resolution failures when using the subpath directly.
 - This strategy is about delivery reduction, not runtime behavior changes. It should not be used to justify unrelated refactors or markup changes.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **3 observations across 3 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: javascript-delivery--component-level-code-splitting-for-optional-ui-controls`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

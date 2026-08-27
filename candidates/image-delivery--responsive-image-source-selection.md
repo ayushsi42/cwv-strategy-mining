@@ -3,7 +3,11 @@ issue_type: image-delivery--responsive-image-source-selection
 parent_strategy: image-delivery
 risk_tier: low
 cwv_metrics: [performance]
-source_prs: [global-nomad#292, ryanofarrell/playful-progressions#97]
+source_prs:
+  - aafre/resume-builder#377
+  - adobecom/express-milo#770
+  - ryanofarrell/playful-progressions#97
+  - sprint-19-part4-1team/global-nomad#292
 required_validation:
   - responsive_image_has_explicit_sizes_and_dimensions
   - responsive_image_uses_priority_for_likely_lcp
@@ -186,3 +190,7 @@ Use the same measurement family already associated with this strategy: **perform
 - Responsive source selection depends on having real variant assets and a `sizes` string that matches the rendered slot.
 - If the image is not actually visible early, the optimization may not help performance.
 - The evidence does not justify universal browser support claims, universal byte-reduction percentages, or a fixed CWV delta.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (4 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **5 observations across 5 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: image-delivery--responsive-image-source-selection`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

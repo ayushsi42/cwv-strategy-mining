@@ -3,7 +3,11 @@ issue_type: network-payload--import-narrower-utility-modules-instead-of-a-full-u
 parent_strategy: network-payload
 risk_tier: low
 cwv_metrics: [Lighthouse JS payload, unused JS]
-source_prs: [hyperlane-xyz/hyperlane-monorepo#7250, microsoft/teams.ts#561, microsoft/rushstack#5421, openremote/openremote#2430]
+source_prs:
+  - hyperlane-xyz/hyperlane-monorepo#7250
+  - microsoft/rushstack#5421
+  - microsoft/teams.ts#561
+  - openremote/openremote#2430
 required_validation:
   - narrower_entrypoint_available
   - import_site_uses_narrower_module_or_package_entrypoint
@@ -185,3 +189,7 @@ Medium. The evidence is consistent across four repositories and shows 100% direc
 - Some umbrella packages intentionally centralize shared behavior; splitting imports without a supported extraction can create maintenance or compatibility issues.
 - This strategy does not guarantee a measurable CWV win in every case; the benefit depends on how much code the narrower source actually removes from the shipped bundle.
 - If the broader package is still needed elsewhere in the same module, the net payload reduction may be limited.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (4 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **4 observations across 4 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: network-payload--import-narrower-utility-modules-instead-of-a-full-utility-bundle`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

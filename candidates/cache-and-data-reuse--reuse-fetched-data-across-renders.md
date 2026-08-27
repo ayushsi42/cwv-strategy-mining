@@ -8,13 +8,15 @@ cwv_metrics:
   - Lighthouse repeated network requests / API latency
 source_prs:
   - ant-design/ant-design#55186
-  - woowacourse/perf-basecamp#183
   - woowacourse/perf-basecamp#170
+  - woowacourse/perf-basecamp#183
 required_validation:
   - repeated_request_has_stable_cache_key
   - cached_result_is_reused_for_subsequent_consumers
   - cache_scope_matches_expected_lifetime
 forbidden_techniques: []
+---
+
 # Reuse fetched data across renders
 
 > **Risk tier:** low · **Parent strategy:** cache-and-data-reuse · **Measured metric:** `bundle_size_delta_pct`
@@ -236,3 +238,7 @@ Inference:
 - A cache only helps when the same request is actually repeated; otherwise it adds complexity without measurable benefit.
 - Different cache scopes have different tradeoffs: in-memory, session-scoped, and response storage are not interchangeable.
 - The evidence supports reuse patterns, but not a universal recommendation to cache every fetch.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **3 observations across 2 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: cache-and-data-reuse--reuse-fetched-data-across-renders`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

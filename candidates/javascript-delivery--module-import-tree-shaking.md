@@ -3,7 +3,12 @@ issue_type: javascript-delivery--module-import-tree-shaking
 parent_strategy: javascript-delivery
 risk_tier: low
 cwv_metrics: [bundle_size_delta_pct]
-source_prs: [Tresjs/tres#1372, MetaMask/metamask-design-system#975, CodinGame/monaco-vscode-api#780, datahub-project/datahub#16338]
+source_prs:
+  - CodinGame/monaco-vscode-api#780
+  - MetaMask/metamask-design-system#975
+  - Tresjs/tres#1372
+  - datahub-project/datahub#16338
+  - epam/ai-dial-chat#4604
 required_validation:
   - import_surface_reduced
   - direct_symbol_imports_used
@@ -221,3 +226,7 @@ Confidence is medium because the evidence is consistent and cross-repository, bu
 - Direct per-symbol imports can increase maintenance burden if the upstream package reorganizes entry points.
 - Shared const-object exports are only appropriate when the value set is finite and stable enough to model explicitly.
 - This strategy should not be used to justify speculative refactors without a measurable bundle-size check.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (5 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **8 observations across 8 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: javascript-delivery--module-import-tree-shaking`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

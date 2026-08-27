@@ -3,7 +3,12 @@ issue_type: dom-complexity--reduce-unnecessary-wrapper-nodes-in-component-compos
 parent_strategy: dom-complexity
 risk_tier: low
 cwv_metrics: [performance, si_ms, bundle_size_delta_pct]
-source_prs: [apikujuni-source/the-gleaning-ground#32, redpanda-data/console#1881, cloudflare/telescope#178, ant-design/x#1713, getarcaneapp/arcane#1621, ant-design/x#1116, ant-design/ant-design#54738, adobecom/express-milo#587]
+source_prs:
+  - ant-design/x#1713
+  - apikujuni-source/the-gleaning-ground#32
+  - cloudflare/telescope#178
+  - getarcaneapp/arcane#1621
+  - redpanda-data/console#1881
 required_validation:
   - wrapper_nodes_removed_from_composed_layout
   - repeated_markup_deduplicated_in_rendered_output
@@ -231,3 +236,7 @@ Use the same measurement families present in the evidence:
 - Shared primitives can become too generic and reintroduce complexity if they accumulate many special cases.
 - Overlay simplification is only safe when the visual and interaction model still works without the extra layers.
 - The evidence supports this as a low-risk optimization only when the rendered structure is clearly redundant.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (5 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **7 observations across 7 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: dom-complexity--reduce-unnecessary-wrapper-nodes-in-component-composition`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

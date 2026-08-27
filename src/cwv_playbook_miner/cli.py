@@ -125,10 +125,15 @@ def cmd_source(args: argparse.Namespace) -> None:
         if lp.signal_type in ("perf_improvement", "perf_decrease")
     }
     in_window_merged = measurable & set(result.merged_prs)
+    merged_at_by_pr: dict[tuple[str, int], str | None] = {
+        key: result.merged_prs[key].get("merged_at") for key in in_window_merged
+    }
     fallback_confirmed = []
     for repo, pr_number in sorted(measurable - in_window_merged):
-        if check_pr_merged(repo, pr_number):
+        merged_at = check_pr_merged(repo, pr_number)
+        if merged_at:
             fallback_confirmed.append((repo, pr_number))
+            merged_at_by_pr[(repo, pr_number)] = merged_at
     candidates = sorted(in_window_merged | set(fallback_confirmed))
     print(
         f"  {len(measurable)} measurable PR(s), {len(candidates)} confirmed merged "
@@ -156,6 +161,7 @@ def cmd_source(args: argparse.Namespace) -> None:
             id=f"{repo}#{pr_number}", repo=repo, pr_number=pr_number, signal_type=lp.signal_type,
             metric_key=lp.metric_key, before=lp.before, after=lp.after, delta=lp.delta,
             changed_files=changed_files, template_names=lp.template_names,
+            merged_at=merged_at_by_pr.get((repo, pr_number)),
         )
         (perf_improvement if lp.signal_type == "perf_improvement" else perf_decrease).append(record)
 
@@ -168,10 +174,14 @@ def cmd_source(args: argparse.Namespace) -> None:
     # pattern_extract.py's inferred_signal_type.
     flagged = human_flagged_candidates(result.comment_hits) - measurable
     flagged_in_window = flagged & set(result.merged_prs)
+    for key in flagged_in_window:
+        merged_at_by_pr.setdefault(key, result.merged_prs[key].get("merged_at"))
     flagged_fallback_confirmed = []
     for repo, pr_number in sorted(flagged - flagged_in_window):
-        if check_pr_merged(repo, pr_number):
+        merged_at = check_pr_merged(repo, pr_number)
+        if merged_at:
             flagged_fallback_confirmed.append((repo, pr_number))
+            merged_at_by_pr.setdefault((repo, pr_number), merged_at)
     flagged_merged = sorted(flagged_in_window | set(flagged_fallback_confirmed))
     if flagged:
         print(
@@ -200,6 +210,7 @@ def cmd_source(args: argparse.Namespace) -> None:
             id=f"{repo}#{pr_number}", repo=repo, pr_number=pr_number, signal_type="perf_flagged",
             metric_key=None, before=None, after=None, delta=None,
             changed_files=changed_files, human_signal_text=hit.body if hit else None,
+            merged_at=merged_at_by_pr.get((repo, pr_number)),
         ))
 
     if getattr(args, "append", False):

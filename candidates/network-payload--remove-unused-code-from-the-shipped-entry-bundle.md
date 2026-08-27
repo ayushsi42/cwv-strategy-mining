@@ -3,7 +3,12 @@ issue_type: network-payload--remove-unused-code-from-the-shipped-entry-bundle
 parent_strategy: network-payload
 risk_tier: low
 cwv_metrics: [bundle_size_delta_pct, performance]
-source_prs: [vlossom-ui/vlossom#117, storybookjs/storybook#32594, Automattic/wp-calypso#108174]
+source_prs:
+  - Automattic/wp-calypso#108174
+  - Sovereign-Labs/sovereign-sdk-web3-js#209
+  - stainless-api/upload-openapi-spec-action#133
+  - storybookjs/storybook#32594
+  - vlossom-ui/vlossom#117
 required_validation:
   - explicit_component_registration_only
   - no_root_package_import_for_tree_shakeable_modules
@@ -222,3 +227,7 @@ High. The supplied evidence includes documentation, code patches, and multiple i
 - Deleting exports can break consumers if the symbol is part of a public API; only remove exports when the evidence shows they are unused or intentionally replaced.
 - Patched package entrypoints may require maintenance when upstream adds new components or changes internal structure.
 - This strategy reduces shipped payload, but it is not a substitute for lazy loading when the code is genuinely non-initial and can be deferred.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (5 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **19 observations across 18 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: network-payload--remove-unused-code-from-the-shipped-entry-bundle`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

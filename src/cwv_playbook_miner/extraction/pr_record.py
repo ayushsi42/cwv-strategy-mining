@@ -36,6 +36,12 @@ class PRRecord:
     changed_files: list[dict] = field(default_factory=list)  # [{filename, patch}]
     template_names: list[str] = field(default_factory=list)
     source: str = "gharchive_live"
+    # ISO 8601 PR merge timestamp -- the temporal dimension needed for any
+    # cross-year/trend analysis over the mined dataset. None only for
+    # records where the merge event/API response genuinely didn't carry one
+    # (should be rare/never for gharchive_live records; external-corpus
+    # records may not have it depending on the source dataset).
+    merged_at: str | None = None
     # Only set for signal_type == "perf_flagged": the review/review-comment
     # body that triggered discovery (no structured bot template matched it,
     # so metric_key/before/after/delta stay None -- extraction infers

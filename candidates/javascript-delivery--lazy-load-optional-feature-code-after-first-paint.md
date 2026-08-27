@@ -3,7 +3,12 @@ issue_type: javascript-delivery--lazy-load-optional-feature-code-after-first-pai
 parent_strategy: javascript-delivery
 risk_tier: low
 cwv_metrics: [FCP, bundle size, main-thread parse]
-source_prs: [iangran/style_hacks#9, webspatial/webspatial-sdk#1233, n8n-io/n8n#30834, iangran/style_hacks#24]
+source_prs:
+  - clerk/javascript#7843
+  - iangran/style_hacks#24
+  - iangran/style_hacks#9
+  - n8n-io/n8n#30834
+  - webspatial/webspatial-sdk#1233
 required_validation:
   - optional_feature_is_not_imported_at_module_top_level
   - runtime_path_or_call_site_gates_loading
@@ -251,3 +256,7 @@ Medium. The mechanism is directly supported by multiple source PRs, but the supp
 - If the optional module has side effects that other code depends on, moving it behind a loader or subpath can require additional initialization changes.
 - Explicit eager/lazy entrypoint splits require consumers to choose the correct entry; mixing them in one bundle can reintroduce the boot cost or create duplicate behavior.
 - This strategy is about delivery shape, not algorithmic optimization; it will not fix expensive work that remains in the critical path.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (5 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **5 observations across 4 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: javascript-delivery--lazy-load-optional-feature-code-after-first-paint`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

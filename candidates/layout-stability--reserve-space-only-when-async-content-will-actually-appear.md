@@ -3,7 +3,12 @@ issue_type: layout-stability--reserve-space-only-when-async-content-will-actuall
 parent_strategy: layout-stability
 risk_tier: low
 cwv_metrics: [CLS]
-source_prs: [dailydotdev/apps#4864, Freakandi/ha-pp-reader#579, aemsites/idfc#522, aemsites/idfc#603, argos-ci/argos#2051]
+source_prs:
+  - Freakandi/ha-pp-reader#579
+  - aemsites/idfc#522
+  - aemsites/idfc#603
+  - argos-ci/argos#2051
+  - dailydotdev/apps#4864
 required_validation:
   - async_content_is_gated_by_presence
 forbidden_techniques: []
@@ -197,3 +202,7 @@ Do not assume a fixed CLS improvement. Verify by comparing before/after behavior
 - Hiding content too aggressively can break editing, preview, or accessibility flows; the evidence explicitly exempts authoring and preview contexts in one source.
 - If the reveal trigger is wrong or incomplete, the content may never appear.
 - This strategy is only justified when the content’s eventual appearance is supported by a concrete async or interaction signal.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (5 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **7 observations across 6 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: layout-stability--reserve-space-only-when-async-content-will-actually-appear`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

@@ -3,7 +3,10 @@ issue_type: font-delivery--reduce-font-blocking-during-first-render
 parent_strategy: font-delivery
 risk_tier: low
 cwv_metrics: [LCP, render-blocking resources]
-source_prs: [woowacourse/perf-basecamp#177, axone-protocol/docs#730]
+source_prs:
+  - axone-protocol/docs#730
+  - mumendiraneyya/clinic_website#23
+  - woowacourse/perf-basecamp#177
 required_validation:
   - font_stylesheet_loaded_asynchronously
   - remote_font_origin_preconnected
@@ -203,3 +206,7 @@ Do not assume a fixed improvement amount. The evidence supports directionality, 
 - Preconnect only helps when the remote font origin is actually used.
 - This strategy addresses first-render blocking, not all font-related performance issues.
 - The evidence does not support claiming browser coverage, universal timing gains, or a specific validation rule beyond the observed mechanisms.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **3 observations across 3 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: font-delivery--reduce-font-blocking-during-first-render`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

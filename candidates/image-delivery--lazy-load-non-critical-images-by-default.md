@@ -10,11 +10,11 @@ cwv_metrics:
   - perf_flagged
   - Lighthouse LCP / CLS / performance review
 source_prs:
-  - teetee971/akiprisaye-web#2110
   - AcademiahubAfrica/Academiahub#416
-  - opengovsg/isomer#1574
   - ericabertugli/ericabertugli.github.io#22
   - komalharshita/DevPath#102
+  - opengovsg/isomer#1574
+  - teetee971/akiprisaye-web#2110
 required_validation:
   - non_critical_image_has_intrinsic_dimensions
   - non_critical_image_uses_lazy_loading
@@ -241,3 +241,7 @@ Use measurable checks tied to the supplied CWV signals:
 - Adding lazy loading without intrinsic dimensions can leave layout space unresolved until decode.
 - The evidence supports this as a low-risk image-delivery tactic only when image criticality is classified correctly.
 - The supplied patches do not justify a universal rule for every image; the apply/skip gates above are required.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (5 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **6 observations across 6 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: image-delivery--lazy-load-non-critical-images-by-default`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

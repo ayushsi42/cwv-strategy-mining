@@ -6,9 +6,11 @@ cwv_metrics:
   - bundle_size_delta_pct
   - performance
 source_prs:
+  - LuccaSA/lucca-front#3903
   - RedHat-UX/red-hat-design-system#2604
-  - woowacourse/perf-basecamp#176
+  - adobecom/milo#4935
   - atlassian-labs/mermaid-diagrams-viewer#77
+  - woowacourse/perf-basecamp#176
 required_validation:
   - id: optional_feature_is_not_needed_for_initial_render
     description: Confirm the optional feature is absent from the initial render path and the page/component still renders correctly without loading the optional module.
@@ -197,3 +199,7 @@ The evidence packet reports:
 - 53 observations across 47 repositories
 - 90.6% directional consistency
 - p25 = 10.02, median = 16.86, p75 = 34.58 for absolute measured delta summary
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (5 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **53 observations across 47 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: javascript-delivery--lazy-load-optional-feature-code-behind-dynamic-import`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

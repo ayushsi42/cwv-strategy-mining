@@ -3,7 +3,10 @@ issue_type: layout-stability--reserve-space-for-pre-hydration-content
 parent_strategy: layout-stability
 risk_tier: low
 cwv_metrics: [CLS]
-source_prs: [pulumi/docs#18139, internetarchive/openlibrary#11812]
+source_prs:
+  - harbor-framework/terminal-bench-3#183
+  - internetarchive/openlibrary#11812
+  - pulumi/docs#18139
 required_validation:
   - pre_hydration_slot_or_widget_is_hidden_until_upgrade
   - replacement_content_has_reserved_space_before_hydration
@@ -226,3 +229,7 @@ For a component like `ol-read-more`, confirm both:
 - Hiding content too broadly can create blank areas or accessibility issues if the fallback is not preserved.
 - The evidence supports height reservation and targeted hiding, not generic removal of all pre-hydration content.
 - The patches do not establish browser support boundaries, universal sizing formulas, or a guaranteed CLS delta.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **3 observations across 3 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: layout-stability--reserve-space-for-pre-hydration-content`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

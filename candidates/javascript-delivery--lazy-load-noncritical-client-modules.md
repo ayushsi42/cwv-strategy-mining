@@ -3,7 +3,10 @@ issue_type: javascript-delivery--lazy-load-noncritical-client-modules
 parent_strategy: javascript-delivery
 risk_tier: low
 cwv_metrics: [bundle_size_delta_pct]
-source_prs: [ColeMurray/background-agents#373, ant-design/x#1233]
+source_prs:
+  - ColeMurray/background-agents#373
+  - ant-design/x#1233
+  - module-federation/core#4449
 required_validation:
   - markdown_code_blocks_present
   - syntax_highlight_theme_loaded_client_side
@@ -283,3 +286,7 @@ No concrete forbidden regex is justified by the supplied evidence. The evidence 
 
 ### Confidence
 Medium. The evidence is consistent across the supplied sources, but the measured data is limited and the exact bundle impact depends on the surrounding client bundle composition.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **3 observations across 3 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: javascript-delivery--lazy-load-noncritical-client-modules`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

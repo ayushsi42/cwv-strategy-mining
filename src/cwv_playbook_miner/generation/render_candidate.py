@@ -150,9 +150,37 @@ def render_candidate(
 Draft to audit and rewrite:
 {draft}
 """
-    return _extract_markdown_document(
+    text = _extract_markdown_document(
         complete_text(CRITIC_SYSTEM_PROMPT, critic_prompt, backend=backend, model=model, timeout=timeout)
     )
+    return _reconcile_source_prs(text, source_records, cluster)
+
+
+def _reconcile_source_prs(text: str, source_records: list[PRRecord], cluster: TechniqueCluster) -> str:
+    """The draft/critic LLM steps free-write `source_prs` from the supplied
+    evidence packet and can silently drop entries. Force it to exactly the
+    PR ids actually supplied as evidence, so the field is never a partial
+    (misleading) citation of what the model was shown, and append a note
+    distinguishing that bounded sample from the cluster's full observation
+    count."""
+    linked_ids = sorted({record.id for record in source_records})
+    try:
+        frontmatter, body = _split_document(text)
+    except ValueError:
+        return text
+    frontmatter["source_prs"] = linked_ids
+    fm_yaml = yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True).rstrip("\n")
+    note = (
+        f"\n## Evidence sample note\n\n"
+        f"This document's `source_prs` list reflects every PR actually supplied as generation "
+        f"evidence for this strategy ({len(linked_ids)} PR{'s' if len(linked_ids) != 1 else ''}). "
+        f"It is a bounded representative sample, not the full evidence base: the mining pipeline "
+        f"recorded **{cluster.frequency} observations across {cluster.distinct_repo_count} "
+        f"repositories** for this technique in total. The statistics elsewhere in this document "
+        f"(Confidence / Evidence sections) describe that full observation set, not just the PRs "
+        f"cited by id.\n"
+    )
+    return f"---\n{fm_yaml}\n---\n{body.rstrip(chr(10))}\n{note}"
 
 
 def _split_document(text: str) -> tuple[dict, str]:

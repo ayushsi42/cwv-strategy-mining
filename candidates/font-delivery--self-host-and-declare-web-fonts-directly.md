@@ -3,7 +3,10 @@ issue_type: font-delivery--self-host-and-declare-web-fonts-directly
 parent_strategy: font-delivery
 risk_tier: low
 cwv_metrics: [CLS, LCP]
-source_prs: [woowacourse/perf-basecamp#184, codeit-fe16-part4-team1/project-mogazoa-app#84, okta/okta-signin-widget#3956]
+source_prs:
+  - codeit-fe16-part4-team1/project-mogazoa-app#84
+  - okta/okta-signin-widget#3956
+  - woowacourse/perf-basecamp#184
 required_validation:
   - local_font_files_present
   - explicit_font_face_rules_present
@@ -226,3 +229,7 @@ Use the same CWV metrics that motivated the change and verify on the affected ro
 - The evidence includes one repository where a remote font import still appears in a non-primary stylesheet; validation must focus on the actual production font path.
 - The supplied PRs do not provide measured deltas, so this playbook cannot promise a fixed CWV improvement.
 - This strategy is only justified when the font is part of the affected render path; otherwise it adds asset and maintenance overhead without evidence-backed benefit.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **4 observations across 4 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: font-delivery--self-host-and-declare-web-fonts-directly`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

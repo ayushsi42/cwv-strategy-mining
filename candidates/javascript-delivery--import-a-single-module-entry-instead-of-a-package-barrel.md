@@ -8,8 +8,8 @@ cwv_metrics:
   - Lighthouse JavaScript payload
   - Lighthouse JavaScript execution
 source_prs:
-  - powerhouse-inc/powerhouse#2079
   - palantir/osdk-ts#2104
+  - powerhouse-inc/powerhouse#2079
   - superplanehq/superplane#5264
 required_validation:
   - package_barrel_import_present
@@ -223,3 +223,7 @@ Medium. The evidence is directionally consistent across three repositories, but 
 - Adding many subpath exports can improve import precision, but it also increases package surface area and maintenance burden.
 - `sideEffects: false` should be used carefully; the evidence supports it only in a package that is already being consumed through explicit module entries.
 - The supplied evidence does not justify claiming a guaranteed bundle-size reduction for every repository; verification must be measurement-based.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **3 observations across 3 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: javascript-delivery--import-a-single-module-entry-instead-of-a-package-barrel`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

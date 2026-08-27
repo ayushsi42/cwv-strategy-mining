@@ -3,7 +3,10 @@ issue_type: network-payload--remove-redundant-style-declarations
 parent_strategy: network-payload
 risk_tier: low
 cwv_metrics: [bundle_size_delta_pct]
-source_prs: [adobe/react-spectrum#9090, ant-design/ant-design#56823, ant-design/ant-design#56924]
+source_prs:
+  - adobe/react-spectrum#9090
+  - ant-design/ant-design#56823
+  - ant-design/ant-design#56924
 required_validation:
   - style_macro_used_for_component_styles
   - redundant_style_declarations_removed_or_collapsed
@@ -184,3 +187,7 @@ The evidence supports reduction, but does not justify promising a fixed percenta
 - Atomic CSS generation can itself create duplicate rules if the input model is not normalized; the evidence warns about this, but does not define a universal fix.
 - The supplied evidence supports bundle-size improvement, not a guaranteed user-visible CWV gain.
 - Do not generalize this strategy to unrelated markup, script, or runtime optimization techniques.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **3 observations across 2 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: network-payload--remove-redundant-style-declarations`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

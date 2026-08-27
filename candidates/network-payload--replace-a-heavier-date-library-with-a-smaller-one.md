@@ -6,9 +6,10 @@ cwv_metrics:
   - bundle size
   - Lighthouse JavaScript payload
 source_prs:
-  - wso2/identity-apps#9366
-  - streamlit/streamlit#13071
   - folio-org/stripes-acq-components#928
+  - opista/website#75
+  - streamlit/streamlit#13071
+  - wso2/identity-apps#9366
 required_validation:
   - id: date_library_dependency_removed
     description: The heavier date library is removed from the affected dependency manifest(s), and the replacement dependency is added only where the code still needs a library.
@@ -226,3 +227,7 @@ Medium. The evidence is consistent across three repositories and shows the same 
 
 ### Inference
 - The payload reduction comes from shipping fewer JavaScript bytes and parsing less date-library code on initial load.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (4 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **4 observations across 4 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: network-payload--replace-a-heavier-date-library-with-a-smaller-one`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

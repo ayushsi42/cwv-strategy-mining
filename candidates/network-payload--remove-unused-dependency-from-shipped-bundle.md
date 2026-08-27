@@ -3,7 +3,12 @@ issue_type: network-payload--remove-unused-dependency-from-shipped-bundle
 parent_strategy: network-payload
 risk_tier: low
 cwv_metrics: [bundle_size_delta_pct]
-source_prs: [kunokdev/react-window-size-listener#30, akash-network/console#2419, openstreetmap/openstreetmap-website#6996, balena-io/balena-sdk#1563]
+source_prs:
+  - akash-network/console#2419
+  - balena-io/balena-sdk#1563
+  - kunokdev/react-window-size-listener#30
+  - openstreetmap/openstreetmap-website#6996
+  - tailwindlabs/tailwindcss#19059
 required_validation:
   - browser_bundle_excludes_unused_dependency
   - shipped_code_uses_local_or_builtin_replacement
@@ -254,3 +259,7 @@ The evidence supports a reduction in shipped bytes when the dependency was truly
 ### Confidence
 
 High. The evidence is directionally consistent across multiple repositories and shows both direct dependency removal and browser-specific exclusion/replacement patterns.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (5 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **18 observations across 16 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: network-payload--remove-unused-dependency-from-shipped-bundle`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

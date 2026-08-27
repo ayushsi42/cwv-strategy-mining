@@ -8,8 +8,8 @@ cwv_metrics:
   - Lighthouse DOM size / main-thread work
   - DOM size / main-thread work
 source_prs:
-  - skalenetwork/portal#619
   - jeong-sik/masc-mcp#8059
+  - skalenetwork/portal#619
   - vivid-planet/comet#4235
 required_validation:
   - address_present_for_subtree
@@ -295,3 +295,7 @@ Medium. The mechanism is consistent across three repositories, but the packet do
 - Variant selection must remain deterministic; otherwise the UI can appear to jump between branches.
 - The evidence supports conditional omission of unnecessary subtrees, not blanket removal of all hidden or secondary UI.
 - No universal browser-support or percentage claims are justified by the supplied evidence.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **3 observations across 3 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: dom-complexity--conditional-rendering-to-avoid-unnecessary-subtree`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.

@@ -98,7 +98,11 @@ def merge_clusters(clusters: list[TechniqueCluster]) -> TechniqueCluster:
         example_code_patterns=[p for c in clusters for p in c.example_code_patterns],
         example_problem_symptoms=[s for c in clusters for s in c.example_problem_symptoms],
         source_pr_ids=[pid for c in clusters for pid in c.source_pr_ids],
-        distinct_repo_count=len({pid.rsplit("#", 1)[0] for c in clusters for pid in c.source_pr_ids}),
+        # Each cluster's distinct_repo_count already reflects its full
+        # aggregate.repo_counts (statistical.py), not just the bounded
+        # representative-PR sample in source_pr_ids -- recomputing from
+        # source_pr_ids here would badly undercount (e.g. 5 vs 47 repos).
+        distinct_repo_count=sum(c.distinct_repo_count for c in clusters),
         positive_count=sum(c.positive_count for c in clusters),
         negative_count=sum(c.negative_count for c in clusters),
         delta_p25=None,

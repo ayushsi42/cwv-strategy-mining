@@ -8,8 +8,8 @@ cwv_metrics:
   - Lighthouse JS execution / startup stability
   - startup time
 source_prs:
-  - trezor/trezor-suite#22446
   - rhencke/tracy#276
+  - trezor/trezor-suite#22446
   - web-infra-dev/rspack#12733
 required_validation:
   - built_dependency_available_before_runtime_import
@@ -205,3 +205,7 @@ Do not assume a fixed numeric improvement. The supplied evidence supports a dire
 - A readiness gate must be reliable; if it never fires, the deferred import will stall.
 - Build-order fixes only help when the failure is caused by missing generated output or an unbuilt dependency.
 - The evidence supports conditional deferral and prerequisite enforcement, not blanket lazy loading of all startup modules.
+
+## Evidence sample note
+
+This document's `source_prs` list above reflects every PR actually supplied as generation evidence for this strategy (3 PRs). It is a bounded representative sample, not the full evidence base: the mining pipeline recorded **3 observations across 3 repositories** for this technique in total (see `data/processed/technique_aggregates.jsonl`, `canonical_id: javascript-delivery--avoid-importing-a-heavy-module-graph-during-startup`). Only a capped sample of representative PRs is retained and linked per technique; the statistics elsewhere in this document (Confidence / Evidence sections) describe that full observation set, not just the PRs cited by id.
