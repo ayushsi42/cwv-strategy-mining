@@ -55,14 +55,20 @@ Broad store subscriptions can cause components to rerender when unrelated state 
 
 Prefer a selector that returns only the boolean, id, or derived list the component actually needs.
 
-```tsx
-// Good: subscribe to a narrow derived value
-import { useSelector } from 'react-redux';
+```js
+// Good: subscribe to a narrow derived value in an EDS block
+export default function decorate(block) {
+  const selectedCountEl = block.querySelector('[data-selected-count]');
+  if (!selectedCountEl) return;
 
-function SelectedCountBadge() {
-  const selectedCount = useSelector((state) => state.selection.ids.length);
+  const render = (state) => {
+    selectedCountEl.textContent = String(state.selection.ids.length);
+  };
 
-  return <span>{selectedCount}</span>;
+  render(window.selectionStore.getState());
+  return window.selectionStore.subscribe((nextState) => {
+    render(nextState);
+  });
 }
 ```
 
@@ -72,23 +78,32 @@ This avoids rerendering the component for unrelated store updates. If the compon
 
 If the component needs a list, derive it from the store with a selector that only changes when the relevant inputs change.
 
-```tsx
-// Good: derive the visible collection list from the minimum inputs
-import { useMemo } from 'react';
-import { useSelector } from 'react-redux';
+```js
+// Good: derive the visible collection list from the minimum inputs in an EDS block
+export default function decorate(block) {
+  const listEl = block.querySelector('[data-visible-items]');
+  const filterInput = block.querySelector('[data-filter-value]');
+  if (!listEl || !filterInput || !window.itemsStore) return;
 
-function VisibleItems({ filterValue }: { filterValue: string }) {
-  const items = useSelector((state) => state.items.byId);
-  const ids = useSelector((state) => state.items.visibleIds);
-
-  const visibleItems = useMemo(() => {
-    const needle = filterValue.toLowerCase();
-    return ids
-      .map((id) => items[id])
+  const render = () => {
+    const state = window.itemsStore.getState();
+    const needle = filterInput.value.toLowerCase();
+    const visibleItems = state.items.visibleIds
+      .map((id) => state.items.byId[id])
       .filter((item) => item.name.toLowerCase().includes(needle));
-  }, [ids, items, filterValue]);
 
-  return <ItemList items={visibleItems} />;
+    listEl.innerHTML = visibleItems
+      .map((item) => `<li>${item.name}</li>`)
+      .join('');
+  };
+
+  render();
+  const unsubscribe = window.itemsStore.subscribe(render);
+  filterInput.addEventListener('input', render);
+  return () => {
+    unsubscribe?.();
+    filterInput.removeEventListener('input', render);
+  };
 }
 ```
 
@@ -98,20 +113,30 @@ This keeps the expensive filtering out of unrelated rerenders and makes the depe
 
 If a component reads multiple unrelated fields, split them so each field can update independently.
 
-```tsx
-// Good: separate subscriptions for separate concerns
-import { useSelector } from 'react-redux';
+```js
+// Good: separate subscriptions for separate concerns in an EDS block
+export default function decorate(block) {
+  const statusEl = block.querySelector('[data-panel-status]');
+  const activeIdEl = block.querySelector('[data-active-id]');
+  if (!statusEl || !activeIdEl || !window.selectionStore) return;
 
-function Toolbar() {
-  const isOpen = useSelector((state) => state.panel.isOpen);
-  const activeId = useSelector((state) => state.selection.activeId);
+  const renderStatus = (state) => {
+    statusEl.textContent = state.panel.isOpen ? 'Open' : 'Closed';
+  };
 
-  return (
-    <div>
-      <span>{isOpen ? 'Open' : 'Closed'}</span>
-      <span>{activeId ?? 'None'}</span>
-    </div>
-  );
+  const renderActiveId = (state) => {
+    activeIdEl.textContent = state.selection.activeId || 'None';
+  };
+
+  renderStatus(window.selectionStore.getState());
+  renderActiveId(window.selectionStore.getState());
+
+  const unsubscribe = window.selectionStore.subscribe((nextState) => {
+    renderStatus(nextState);
+    renderActiveId(nextState);
+  });
+
+  return unsubscribe;
 }
 ```
 
@@ -121,12 +146,20 @@ This reduces the chance that a large object identity change forces a rerender wh
 
 ### Subscribing to the whole store slice when only one field is needed
 
-```tsx
-// Bad
-function SelectedCountBadge() {
-  const selection = useSelector((state) => state.selection);
+```js
+// Bad: subscribing to the whole selection slice in an EDS block
+export default function decorate(block) {
+  const selectedCountEl = block.querySelector('[data-selected-count]');
+  if (!selectedCountEl || !window.selectionStore) return;
 
-  return <span>{selection.ids.length}</span>;
+  const render = (state) => {
+    selectedCountEl.textContent = String(state.selection.ids.length);
+  };
+
+  render(window.selectionStore.getState());
+  return window.selectionStore.subscribe((nextState) => {
+    render(nextState);
+  });
 }
 ```
 
@@ -134,17 +167,31 @@ function SelectedCountBadge() {
 
 ### Returning a new derived object on every render without memoization
 
-```tsx
-// Bad
-function VisibleItems({ filterValue }: { filterValue: string }) {
-  const items = useSelector((state) => state.items.byId);
-  const ids = useSelector((state) => state.items.visibleIds);
+```js
+// Bad: recomputing the visible list on every client-side update in an EDS block
+export default function decorate(block) {
+  const listEl = block.querySelector('[data-visible-items]');
+  const filterInput = block.querySelector('[data-filter-value]');
+  if (!listEl || !filterInput || !window.itemsStore) return;
 
-  const visibleItems = ids.map((id) => items[id]).filter((item) =>
-    item.name.toLowerCase().includes(filterValue.toLowerCase())
-  );
+  const render = () => {
+    const state = window.itemsStore.getState();
+    const visibleItems = state.items.visibleIds
+      .map((id) => state.items.byId[id])
+      .filter((item) => item.name.toLowerCase().includes(filterInput.value.toLowerCase()));
 
-  return <ItemList items={visibleItems} />;
+    listEl.innerHTML = visibleItems
+      .map((item) => `<li>${item.name}</li>`)
+      .join('');
+  };
+
+  render();
+  const unsubscribe = window.itemsStore.subscribe(render);
+  filterInput.addEventListener('input', render);
+  return () => {
+    unsubscribe?.();
+    filterInput.removeEventListener('input', render);
+  };
 }
 ```
 
@@ -152,28 +199,26 @@ function VisibleItems({ filterValue }: { filterValue: string }) {
 
 ### Using a broad context value for selection state
 
-```tsx
-// Bad
-const SelectionContext = React.createContext({ selection: {}, setSelection: () => {} });
-
-function SelectionLabel() {
-  const { selection } = React.useContext(SelectionContext);
-  return <span>{selection.ids.length}</span>;
-}
+```html
+<!-- Bad: broad HTL output encourages consumers to depend on the whole selection object -->
+<sly data-sly-use.model="com.example.components.SelectionModel" />
+<div class="selection-context" data-selection='${model.selection @ context="attribute"}'>
+  <span class="selection-context__count">${model.selection.ids.length}</span>
+</div>
 ```
 
 **Why this is bad:** Any provider value change can rerender all consumers, even those that only need a tiny part of the selection state.
 
 ### Triggering rerenders through side-effectful selection updates
 
-```tsx
-// Bad
-function onSelect(id: string) {
-  store.setState({
+```js
+// Bad: copying unrelated data into selection state in an EDS client-side store update
+function onSelect(id) {
+  window.selectionStore.setState({
     selection: {
-      ...store.getState().selection,
+      ...window.selectionStore.getState().selection,
       activeId: id,
-      allItems: store.getState().items,
+      allItems: window.itemsStore.getState().items,
     },
   });
 }
@@ -195,12 +240,12 @@ export default function decorate(block) {
     if (selectedCountEl) selectedCountEl.textContent = String(count);
   };
 
-  // Subscribe only to the value this block needs.
-  // Replace this with the project's actual client-side store API.
-  const unsubscribe = window.selectionStore?.subscribe?.(
-    (state) => state.selection.ids.length,
-    updateSelectedCount
-  );
+  const state = window.selectionStore?.getState?.();
+  updateSelectedCount(state?.selection?.ids?.length ?? 0);
+
+  const unsubscribe = window.selectionStore?.subscribe?.((nextState) => {
+    updateSelectedCount(nextState.selection.ids.length);
+  });
 
   return unsubscribe;
 }
@@ -208,11 +253,66 @@ export default function decorate(block) {
 
 ### CS
 
-In React-based AEM CS frontends, prefer selectors that read only the fields needed by the component. If a page-level provider feeds many components, split the provider value or expose focused selectors so selection changes do not rerender the whole tree. For client libraries, define them in `.content.xml` rather than packaging them through `package.json` or webpack-specific metadata.
+In AEM CS frontends, prefer HTL or clientlib-loaded vanilla JS that reads only the fields needed by the component. If a page-level model or client-side store feeds many components, split the data access so selection changes do not rerender the whole tree. For client libraries, define them in `.content.xml` and load them via categories/dependencies rather than bundler-only configuration.
+
+```html
+<!-- Good: HTL renders a narrow selection badge and clientlib handles updates -->
+<sly data-sly-use.model="com.example.components.SelectionModel" />
+<span class="selection-badge" data-selected-count="${model.selectedCount}">${model.selectedCount}</span>
+```
+
+```js
+// Good: clientlib JS updates only the needed DOM node
+(function () {
+  const badge = document.querySelector('[data-selected-count]');
+  if (!badge || !window.selectionStore) return;
+
+  const render = (state) => {
+    badge.textContent = String(state.selection.ids.length);
+  };
+
+  render(window.selectionStore.getState());
+  window.selectionStore.subscribe(render);
+})();
+```
+
+```xml
+<!-- Good: clientlib definition -->
+<jcr:root xmlns:jcr="http://www.jcp.org/jcr/1.0"
+    jcr:primaryType="cq:ClientLibraryFolder"
+    categories="[example.selection]"
+    dependencies="[cq.jquery]" />
+```
 
 ### AMS
 
 For AMS client-rendered widgets, keep selection state local to the widget when possible. If a shared store is required, avoid passing the full store object through props or context; derive the smallest stable value before rendering the component subtree. For client libraries, use the AEM clientlib `.content.xml` structure instead of bundler-only configuration.
+
+```html
+<!-- Good: HTL outputs only the narrow value needed by the widget -->
+<sly data-sly-use.model="com.example.components.SelectionModel" />
+<div class="toolbar">
+  <span class="toolbar__status">${model.isPanelOpen ? 'Open' : 'Closed'}</span>
+  <span class="toolbar__active-id">${model.activeId ? model.activeId : 'None'}</span>
+</div>
+```
+
+```js
+// Good: client-side widget reads focused values only
+(function () {
+  const statusEl = document.querySelector('.toolbar__status');
+  const activeIdEl = document.querySelector('.toolbar__active-id');
+  if (!statusEl || !activeIdEl || !window.selectionStore) return;
+
+  const render = (state) => {
+    statusEl.textContent = state.panel.isOpen ? 'Open' : 'Closed';
+    activeIdEl.textContent = state.selection.activeId || 'None';
+  };
+
+  render(window.selectionStore.getState());
+  window.selectionStore.subscribe(render);
+})();
+```
 
 ### Headless
 

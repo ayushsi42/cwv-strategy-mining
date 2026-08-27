@@ -5,38 +5,39 @@ When a feature needs only a few icons from a large catalog, import the specific 
 **Good example:**
 
 ```javascript
-import CheckCircle from '@phosphor-icons/react/dist/icons/CheckCircle.js';
-import Info from '@phosphor-icons/react/dist/icons/Info.js';
-import WarningCircle from '@phosphor-icons/react/dist/icons/WarningCircle.js';
-import X from '@phosphor-icons/react/dist/icons/X.js';
+import CheckCircle from './icons/CheckCircle.js';
+import Info from './icons/Info.js';
+import WarningCircle from './icons/WarningCircle.js';
+import X from './icons/X.js';
 
 import { AlertIconWrapper } from './components/AlertIconWrapper.js';
 
-export function AlertIcon({ variant }) {
+export default function decorate(block) {
+  const variant = block.dataset.variant || 'error';
   const icon =
     variant === 'success' ? CheckCircle :
     variant === 'info' ? Info :
     variant === 'warning' ? WarningCircle :
     X;
 
-  return AlertIconWrapper({ icon });
+  AlertIconWrapper(block, icon);
 }
 ```
 
 **Bad example:**
 
 ```javascript
-import * as Icons from '@phosphor-icons/react';
-import React from 'react';
+import * as Icons from './icons/index.js';
 
-export function AlertIcon({ variant }) {
+export default function decorate(block) {
+  const variant = block.dataset.variant || 'error';
   const icon =
     variant === 'success' ? Icons.CheckCircle :
     variant === 'info' ? Icons.Info :
     variant === 'warning' ? Icons.WarningCircle :
     Icons.X;
 
-  return <AlertIconWrapper icon={icon} />;
+  AlertIconWrapper(block, icon);
 }
 ```
 

@@ -132,6 +132,66 @@ def _grounding_check(text: str, evidence_block: str, backend: str, model: str | 
 
 
 # ---------------------------------------------------------------------------
+# AEM-fidelity check -- a dedicated pass, not a critic sub-bullet. The
+# critic's AEM check is narrow (EDS decorate() signature, CS/AMS clientlib-
+# not-webpack) and doesn't catch a bare React/JSX example that has neither
+# webpack nor package.json in sight -- confirmed live: the source evidence
+# for several clusters was itself React code (e.g. row virtualization mined
+# from a React app), and the draft model sometimes carried the source
+# framework over almost verbatim instead of translating the technique into
+# AEM-native terms. Runs last, after grounding, so it's the final gate on
+# what actually ships.
+# ---------------------------------------------------------------------------
+
+_AEM_FIDELITY_SYSTEM = """You are an AEM platform engineer checking whether every code example in a CWV
+playbook is genuinely implementable on the platform(s) its front matter's applicable_flavors claims --
+eds, cs, ams, headless.
+
+For each flavor listed, code examples in the MAIN body (## Recommended approaches / ## Anti-patterns --
+not inside a ## Flavor-specific notes subsection) must use that flavor's real idioms:
+- eds: block `decorate(block)` export, `import()` from block-relative paths, vanilla JS/CSS/HTML -- no
+  build step, no npm package imports
+- cs / ams: HTL (`<sly data-sly-...>`), Sling Models (Java), or clientlib `.content.xml` + vanilla JS/CSS
+  loaded via categories/dependencies -- never React/Vue/JSX, never a bare npm package import as the
+  primary mechanism
+- headless: a JS framework (React, etc.) is legitimate ONLY when applicable_flavors is headless-only, or
+  when that code lives inside a `### Headless` flavor-specific subsection -- never as the universal main-
+  body example when eds/cs/ams are also claimed to apply
+
+A code example FAILS when it uses React/Vue/Next.js/JSX/a bare npm package import as the primary "Good"
+or "Bad" example for a flavor that isn't headless-only, when EDS code doesn't use decorate(block), or
+when CS/AMS code uses package.json/webpack instead of clientlib format. This applies equally to "Bad"
+examples in Anti-patterns -- an anti-pattern's code must still be code that would actually appear in the
+claimed flavor's codebase, not a generic React mistake. A `.tsx`/`.jsx` fenced code block, or any use of
+`useState`/`useEffect`/`useSelector`/`useMemo`/`React.`/`import ... from 'react'`/`from 'react-redux'`,
+is a React idiom and fails for every non-headless-only flavor, full stop -- it is never "close enough" or
+"illustrative pseudocode."
+
+Before writing your output, go through the document top to bottom and individually check EVERY fenced
+code block under `## Recommended approaches` and `## Anti-patterns` (both "Good" and "Bad" examples) --
+do not stop after finding and fixing the first violation, and do not skip a block because it looks
+framework-agnostic at a glance; check its actual contents and fenced language tag. A block inside
+`## Flavor-specific notes` / `### Headless` is exempt; every other block under those two headings is not.
+
+For each failure, REWRITE only that code example into a real, idiomatic equivalent for the claimed
+flavor(s) -- keep the same underlying technique and behavior, translate the implementation. Do not
+remove a flavor from applicable_flavors to dodge the check; translate the code to actually support it.
+If every example already checks out, make no changes.
+
+Output ONLY the complete, corrected Markdown document, identical to the input except where a code
+example needed AEM-native translation. No commentary."""
+
+
+def _aem_fidelity_check(text: str, backend: str, model: str | None, timeout: int, flavors_note: str = "") -> str:
+    """flavors_note is only needed for enrichment blocks, which have no
+    front matter of their own to read applicable_flavors from -- new
+    playbooks carry that in the document text itself."""
+    user = f"{flavors_note}\n\n{text}" if flavors_note else text
+    checked = complete_text(_AEM_FIDELITY_SYSTEM, user, backend=backend, model=model, timeout=timeout)
+    return _extract_document(checked) if "---" in checked[:50] else checked.strip()
+
+
+# ---------------------------------------------------------------------------
 # New playbook (novel, coherence-verified cluster)
 # ---------------------------------------------------------------------------
 
@@ -319,8 +379,9 @@ Draft to review and rewrite:
 
     full_evidence = approach_block + "\n\n" + antipattern_block
     grounded = _grounding_check(critiqued, full_evidence, backend, model, timeout)
+    aem_checked = _aem_fidelity_check(grounded, backend, model, timeout)
 
-    return _reconcile_front_matter(grounded, cluster)
+    return _reconcile_front_matter(aem_checked, cluster)
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +464,15 @@ Proposed new content to review:
     full_evidence = approach_block + "\n\n" + antipattern_block
     grounded = _grounding_check(critiqued, full_evidence, backend, model, timeout).strip()
 
-    return grounded + "\n\n" + _source_pr_note(evidence.approach_pr_ids, evidence.antipattern_pr_ids)
+    existing_fm, _ = _split_front_matter(existing)
+    flavors = existing_fm.get("applicable_flavors") or []
+    flavors_note = (
+        f"applicable_flavors for the playbook this content is being added to: {flavors}"
+        if flavors else ""
+    )
+    aem_checked = _aem_fidelity_check(grounded, backend, model, timeout, flavors_note=flavors_note)
+
+    return aem_checked + "\n\n" + _source_pr_note(evidence.approach_pr_ids, evidence.antipattern_pr_ids)
 
 
 def _source_pr_note(approach_pr_ids: list[str], antipattern_pr_ids: list[str]) -> str:

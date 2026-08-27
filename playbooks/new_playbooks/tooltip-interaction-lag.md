@@ -22,8 +22,7 @@ forbidden_techniques:
   reason: Don't throttle tooltip hover state updates — it can leave the active tooltip
     behind the pointer and feel unresponsive
 - pattern: delay(Group|Ref|Ms|Time)?\s*[:=]\s*[^;\n]*\b(2\d{2,}|[3-9]\d{2,})\b
-  reason: Don't introduce large shared delay-group values — stale timing state is
-    the regression class this playbook is meant to avoid
+  reason: Don't introduce large shared delay-group values — stale timing state is the regression class this playbook is meant to avoid
 source_prs:
 - getarcaneapp/arcane#1621
 - mui/base-ui#4887
@@ -88,28 +87,33 @@ This keeps the interaction responsive while preventing older hover events from f
 
 If tooltips share a provider/context for open and close timing, make sure inactive consumers do not clear the active context and that updated timing props are reflected immediately.
 
-```tsx
+```js
 // Good: keep the active delay context current and preserve it across inactive unmounts
-function FloatingDelayGroup({ delay, children }) {
-  const delayRef = React.useRef(delay);
-  const initialDelayRef = React.useRef(delay);
-  const currentIdRef = React.useRef<string | null>(null);
+function createDelayGroup(initialDelay) {
+  var delayRef = { current: initialDelay };
+  var initialDelayRef = { current: initialDelay };
+  var currentIdRef = { current: null };
 
-  React.useLayoutEffect(() => {
-    initialDelayRef.current = delay;
+  function updateDelay(nextDelay) {
+    initialDelayRef.current = nextDelay;
 
     if (!currentIdRef.current) {
-      delayRef.current = delay;
+      delayRef.current = nextDelay;
       return;
     }
 
     delayRef.current = {
       open: delayRef.current.open,
-      close: delay.close,
+      close: nextDelay.close,
     };
-  }, [delay]);
+  }
 
-  return children;
+  return {
+    delayRef: delayRef,
+    initialDelayRef: initialDelayRef,
+    currentIdRef: currentIdRef,
+    updateDelay: updateDelay,
+  };
 }
 ```
 
@@ -147,9 +151,7 @@ This reduces unnecessary work during hover and keeps the pointer interaction sna
 
 ```js
 // Bad
-import debounce from 'lodash.debounce';
-
-const debouncedHandleMouseEnter = debounce(() => {
+var debouncedHandleMouseEnter = debounce(function () {
   setActiveTraceLabel(label);
 }, 700);
 
@@ -162,14 +164,12 @@ function handleOnMouseEnter() {
 
 ### Letting inactive tooltip unmounts clear the active delay context
 
-```tsx
+```js
 // Bad
-useEffect(() => {
-  return () => {
-    currentContextRef.current = null;
-    delayRef.current = initialDelayRef.current;
-  };
-}, []);
+function cleanupDelayState(currentContextRef, delayRef, initialDelayRef) {
+  currentContextRef.current = null;
+  delayRef.current = initialDelayRef.current;
+}
 ```
 
 **Why this is bad:** Clearing shared delay state from an inactive consumer can break the next tooltip transition and create inconsistent hover timing.
@@ -189,7 +189,7 @@ function handleMouseEnter() {
 
 ### Recomputing tooltip state for the whole list on every pointer move
 
-```jsx
+```js
 // Bad
 function onMouseMove() {
   setHoveredId(Date.now());
@@ -232,10 +232,147 @@ export default function decorate(block) {
 
 If the tooltip lives in a clientlib-backed component, keep the timing logic in the component JS and avoid pushing hover state into a shared clientlib singleton unless multiple components truly need it. Validate that the updated behavior does not change other templates that reuse the same component. For clientlib delivery, use the standard `.content.xml` clientlib structure rather than package or bundler configuration.
 
+```xml
+<!-- /apps/example/components/tooltip/.content.xml -->
+<?xml version="1.0" encoding="UTF-8"?>
+<jcr:root
+    xmlns:jcr="http://www.jcp.org/jcr/1.0"
+    jcr:primaryType="cq:ClientLibraryFolder"
+    categories="[example.tooltip]"
+    dependencies="[cq.jquery]"/>
+```
+
+```js
+// /apps/example/components/tooltip/clientlibs/tooltip.js
+(function () {
+  var openTimer = null;
+  var closeTimer = null;
+
+  function initTooltip(root) {
+    var trigger = root.querySelector('[data-tooltip-trigger]');
+    var tooltip = root.querySelector('[role="tooltip"]');
+
+    if (!trigger || !tooltip) return;
+
+    trigger.addEventListener('mouseenter', function () {
+      clearTimeout(closeTimer);
+      clearTimeout(openTimer);
+      openTimer = setTimeout(function () {
+        tooltip.hidden = false;
+      }, 0);
+    });
+
+    trigger.addEventListener('mouseleave', function () {
+      clearTimeout(openTimer);
+      closeTimer = setTimeout(function () {
+        tooltip.hidden = true;
+      }, 0);
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-tooltip-root]').forEach(initTooltip);
+  });
+})();
+```
+
 ### AMS
 
 If the tooltip is rendered through JSP/HTL plus clientlib JS, keep the timing fix in the client-side behavior layer. Avoid broad server-side markup changes unless the tooltip trigger markup itself must change. For clientlib delivery, use the standard `.content.xml` clientlib structure.
 
+```html
+<!-- /apps/example/components/tooltip/tooltip.html -->
+<sly data-sly-use.model="com.example.components.TooltipModel" />
+<div class="tooltip" data-tooltip-root>
+  <button type="button" data-tooltip-trigger>
+    ${model.label}
+  </button>
+  <div role="tooltip" hidden>
+    ${model.tooltipText}
+  </div>
+</div>
+```
+
+```xml
+<!-- /apps/example/components/tooltip/clientlibs/.content.xml -->
+<?xml version="1.0" encoding="UTF-8"?>
+<jcr:root
+    xmlns:jcr="http://www.jcp.org/jcr/1.0"
+    jcr:primaryType="cq:ClientLibraryFolder"
+    categories="[example.tooltip]"
+    dependencies="[cq.jquery]"/>
+```
+
+```js
+// /apps/example/components/tooltip/clientlibs/tooltip.js
+(function () {
+  function init(root) {
+    var trigger = root.querySelector('[data-tooltip-trigger]');
+    var tooltip = root.querySelector('[role="tooltip"]');
+    var openTimer = null;
+    var closeTimer = null;
+
+    if (!trigger || !tooltip) return;
+
+    trigger.addEventListener('focus', function () {
+      clearTimeout(closeTimer);
+      clearTimeout(openTimer);
+      openTimer = setTimeout(function () {
+        tooltip.hidden = false;
+      }, 0);
+    });
+
+    trigger.addEventListener('blur', function () {
+      clearTimeout(openTimer);
+      closeTimer = setTimeout(function () {
+        tooltip.hidden = true;
+      }, 0);
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('[data-tooltip-root]').forEach(init);
+  });
+})();
+```
+
 ### Headless
 
 Apply the fix only in the client-rendered tooltip component. Do not move the timing logic into the API layer; the problem is interaction state, not data shape.
+
+```tsx
+function TooltipTrigger({ label, tooltip }) {
+  const [open, setOpen] = React.useState(false);
+  const openTimerRef = React.useRef(null);
+  const closeTimerRef = React.useRef(null);
+
+  const handleEnter = React.useCallback(() => {
+    clearTimeout(closeTimerRef.current);
+    clearTimeout(openTimerRef.current);
+    openTimerRef.current = setTimeout(() => {
+      setOpen(true);
+    }, 0);
+  }, []);
+
+  const handleLeave = React.useCallback(() => {
+    clearTimeout(openTimerRef.current);
+    closeTimerRef.current = setTimeout(() => {
+      setOpen(false);
+    }, 0);
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      clearTimeout(openTimerRef.current);
+      clearTimeout(closeTimerRef.current);
+    };
+  }, []);
+
+  return (
+    <button onPointerEnter={handleEnter} onPointerLeave={handleLeave} aria-describedby={open ? 'tip' : undefined}>
+      {label}
+      {open ? <span id="tip" role="tooltip">{tooltip}</span> : null}
+    </button>
+  );
+}
+```
