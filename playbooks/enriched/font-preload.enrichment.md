@@ -35,3 +35,5 @@ Use this when the font file URL is stable and the font is already isolated in it
   src: local("Inter"), url("inter.woff2") format("woff2");
 }
 ```
+
+> **Source PRs** — **approach:** RomanShemelin/e-commerce#1, htmlacademy-adaptive/2280491-cat-energy-28#9, woowacourse/perf-basecamp#121, danskernesdigitalebibliotek/dpl-cms#230, scandipwa/scandipwa#3139 · **anti-pattern:** lifeisbeautifu1/modern-react-app#61

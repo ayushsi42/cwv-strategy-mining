@@ -92,15 +92,17 @@ def _extract_document(text: str) -> str:
 
 
 def write_playbook(text: str, issue_type: str, output_dir: Path) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{issue_type}.md"
+    subdir = output_dir / "new_playbooks"
+    subdir.mkdir(parents=True, exist_ok=True)
+    path = subdir / f"{issue_type}.md"
     path.write_text(text, encoding="utf-8")
     return path
 
 
 def write_enrichment(text: str, playbook_id: str, output_dir: Path) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{playbook_id}.enrichment.md"
+    subdir = output_dir / "enriched"
+    subdir.mkdir(parents=True, exist_ok=True)
+    path = subdir / f"{playbook_id}.enrichment.md"
     path.write_text(text, encoding="utf-8")
     return path
 
@@ -181,23 +183,83 @@ Output ONLY the complete revised Markdown document starting with `---`. No comme
 """
 
 
-def _reconcile_front_matter(text: str, cluster: NovelCluster) -> str:
-    """Ensure issue_type, applicable_flavors, and risk_tier in the front
-    matter exactly match the cluster metadata (LLM sometimes drifts)."""
+def _split_front_matter(text: str) -> tuple[dict, str]:
+    """Tolerant front-matter split -- the LLM has been observed to (a) omit
+    the closing `---` fence entirely, and (b) write YAML-invalid escaping
+    inside a forbidden_techniques regex (e.g. `[\\'"]` in a double-quoted
+    scalar). Either one used to make the old regex-based parse silently
+    fail and fall through a bare `except: return text`, which meant
+    `source_prs` -- and every other programmatically-set field -- never
+    actually landed in ANY of a real 9-playbook batch. Never silently give
+    up here: worst case, return an empty dict and the whole body as text,
+    and let the caller rebuild a correct front matter block from scratch."""
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+
+    close_idx = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if close_idx is None:
+        # No closing fence -- guess the body starts at the first H1/H2 heading.
+        close_idx = next((i for i in range(1, len(lines)) if lines[i].startswith("#")), len(lines))
+        fm_text = "\n".join(lines[1:close_idx])
+        body = "\n".join(lines[close_idx:])
+    else:
+        fm_text = "\n".join(lines[1:close_idx])
+        body = "\n".join(lines[close_idx + 1:])
+
     try:
-        match = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
-        if not match:
-            return text
-        fm = yaml.safe_load(match.group(1)) or {}
-        fm["issue_type"] = cluster.issue_type
-        fm["applicable_flavors"] = cluster.applicable_flavors
-        fm["risk_tier"] = cluster.risk_tier
-        if "source_prs" not in fm:
-            fm["source_prs"] = cluster.source_pr_ids[:20]
-        fm_yaml = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True).rstrip("\n")
-        return f"---\n{fm_yaml}\n---\n{match.group(2)}"
-    except Exception:  # noqa: BLE001
-        return text
+        fm = yaml.safe_load(fm_text)
+        fm = fm if isinstance(fm, dict) else {}
+    except yaml.YAMLError:
+        fm = {}
+    return fm, body.lstrip("\n")
+
+
+def _normalize_forbidden_techniques(raw) -> list[dict]:
+    """The spec requires {pattern, reason} dicts; the LLM sometimes writes
+    bare regex strings instead. Normalize rather than drop, and validate
+    each pattern actually compiles as Python re (the spec's own contract)
+    -- an invalid one gets dropped rather than shipped broken."""
+    out = []
+    for item in raw or []:
+        if isinstance(item, dict) and item.get("pattern"):
+            pattern, reason = item["pattern"], item.get("reason", "")
+        elif isinstance(item, str) and item:
+            pattern, reason = item, "Matches a known anti-pattern from the source evidence."
+        else:
+            continue
+        try:
+            re.compile(pattern)
+        except re.error:
+            continue
+        out.append({"pattern": pattern, "reason": reason})
+    return out
+
+
+def _fix_when_to_apply_heading(body: str) -> str:
+    return re.sub(
+        r"^## When to apply\s*$", "## When to apply / when to skip", body,
+        count=1, flags=re.MULTILINE,
+    )
+
+
+def _reconcile_front_matter(text: str, cluster: NovelCluster) -> str:
+    """Guarantees issue_type/applicable_flavors/risk_tier/source_prs/
+    forbidden_techniques are correct and present, regardless of how the
+    LLM formatted (or malformed) its own front matter -- these are exactly
+    the fields the checklist and the loader depend on, so this never
+    falls back to "leave it as the model wrote it"."""
+    fm, body = _split_front_matter(text)
+    fm["issue_type"] = cluster.issue_type
+    fm["applicable_flavors"] = cluster.applicable_flavors
+    fm["risk_tier"] = cluster.risk_tier
+    fm["forbidden_techniques"] = _normalize_forbidden_techniques(fm.get("forbidden_techniques"))
+    fm.setdefault("required_validation", [])
+    fm["source_prs"] = cluster.source_pr_ids[:20]
+
+    fm_yaml = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True).rstrip("\n")
+    body = _fix_when_to_apply_heading(body)
+    return f"---\n{fm_yaml}\n---\n{body}"
 
 
 def render_new_playbook(
@@ -339,4 +401,20 @@ Proposed new content to review:
     critiqued = complete_text(_ENRICH_CRITIC_SYSTEM, critic_user, backend=backend, model=model, timeout=timeout).strip()
 
     full_evidence = approach_block + "\n\n" + antipattern_block
-    return _grounding_check(critiqued, full_evidence, backend, model, timeout).strip()
+    grounded = _grounding_check(critiqued, full_evidence, backend, model, timeout).strip()
+
+    return grounded + "\n\n" + _source_pr_note(evidence.approach_pr_ids, evidence.antipattern_pr_ids)
+
+
+def _source_pr_note(approach_pr_ids: list[str], antipattern_pr_ids: list[str]) -> str:
+    """Enrichment blocks are spliced into an existing playbook's body, not a
+    standalone document, so they never get their own YAML front matter --
+    but the checklist requires grounding by source PR regardless. A small
+    marked note (not a fabricated field the loader might try to parse)
+    keeps that traceable in the file itself, not only in enrichments.jsonl."""
+    parts = []
+    if approach_pr_ids:
+        parts.append(f"**approach:** {', '.join(approach_pr_ids)}")
+    if antipattern_pr_ids:
+        parts.append(f"**anti-pattern:** {', '.join(antipattern_pr_ids)}")
+    return f"> **Source PRs** — {' · '.join(parts)}" if parts else ""

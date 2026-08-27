@@ -49,3 +49,5 @@ If a script is only needed for diagnostics or secondary UI behavior, load it aft
 ```
 
 This keeps non-essential instrumentation out of the LCP path while still allowing it to run later for monitoring or debugging.
+
+> **Source PRs** — **approach:** elastic/kibana#139212, primer/view_components#1830, wp-media/wp-rocket#6459, adobecom/express#930, lumel-websites/wp-lazyload#1 · **anti-pattern:** synapsecns/sanguine#3235, ant-design/ant-design#52300, ant-design/ant-design#52355, adobecom/express#495

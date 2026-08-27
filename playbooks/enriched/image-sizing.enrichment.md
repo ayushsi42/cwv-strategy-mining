@@ -23,3 +23,5 @@ img {
   vertical-align: middle;
 }
 ```
+
+> **Source PRs** — **approach:** woowacourse/perf-basecamp#163, technologiestiftung/service-agentinnen#34, technologiestiftung/service-agentinnen#27, guardian/dotcom-rendering#4742, mozilla/bedrock#11994 · **anti-pattern:** felix-berlin/webshaped-blog-astro#64

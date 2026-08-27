@@ -14,3 +14,5 @@ setCity(city);
 ```
 
 Use this when the data is consumed together and there is no dependency between the calls.
+
+> **Source PRs** — **approach:** digitalfabrik/integreat-app#942, elastic/kibana#183806, decentraland/marketplace#2268, agencyenterprise/ai-reviewer#149, ampproject/amphtml#36757 · **anti-pattern:** getsentry/sentry#78278

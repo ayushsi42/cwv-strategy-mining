@@ -449,7 +449,7 @@ def cmd_generate(args: argparse.Namespace) -> None:
         clusters = read_clusters(clusters_path)
         print(f"Generating {len(clusters)} new playbooks...")
         for cluster in clusters:
-            out_path = output_dir / f"{cluster.issue_type}.md"
+            out_path = output_dir / "new_playbooks" / f"{cluster.issue_type}.md"
             if out_path.exists() and not args.overwrite:
                 print(f"  [{cluster.issue_type}] already exists, skipping (--overwrite to redo)")
                 continue
@@ -466,7 +466,7 @@ def cmd_generate(args: argparse.Namespace) -> None:
             for ev in enrichments:
                 if not ev.approach_pr_ids and not ev.antipattern_pr_ids:
                     continue
-                out_path = output_dir / f"{ev.playbook_id}.enrichment.md"
+                out_path = output_dir / "enriched" / f"{ev.playbook_id}.enrichment.md"
                 if out_path.exists() and not args.overwrite:
                     print(f"  [{ev.playbook_id}] already exists, skipping (--overwrite to redo)")
                     continue

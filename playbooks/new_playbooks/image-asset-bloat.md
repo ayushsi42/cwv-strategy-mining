@@ -1,17 +1,28 @@
 ---
 issue_type: image-asset-bloat
-applicable_flavors: [eds, cs, ams, headless]
+applicable_flavors:
+- eds
+- cs
+- ams
+- headless
 risk_tier: medium
-
 required_validation:
-  - image_asset_is_lcp_or_above_fold
-  - image_dimensions_known_or_reservable
-  - replacement_asset_is_smaller_or_equivalent
-  - image_not_js_lazy_loaded
-  - no_existing_stable_image_component_available
-
+- image_asset_is_lcp_or_above_fold
+- image_dimensions_known_or_reservable
+- replacement_asset_is_smaller_or_equivalent
+- image_not_js_lazy_loaded
+- no_existing_stable_image_component_available
 forbidden_techniques: []
-
+source_prs:
+- Lissy93/dashy#194
+- esc-chula/larngearcamp-frontend#9
+- estartando-devs/site#48
+- homebound-team/beam#666
+- flutter/website#8995
+- RetroAchievements/RAWeb#2137
+- woowacourse-teams/2024-corea#527
+- argoproj/argo-cd#21012
+---
 # Image asset bloat
 
 > **Risk tier:** medium · **Applies to:** EDS, CS, AMS, Headless · **CWV metric:** LCP, CLS

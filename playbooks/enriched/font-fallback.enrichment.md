@@ -36,3 +36,5 @@
 ```
 
 **Why this is bad:** `font-style: block` is not a valid value, so the declaration may be ignored or make the face fail to match as intended. `font-display: block` can hide text for a period while the font loads, which may delay text rendering. Use a valid `font-style` such as `normal` or `italic`, and use `font-display: swap` or `optional` instead.
+
+> **Source PRs** — **approach:** woowacourse/perf-basecamp#184, mumendiraneyya/clinic_website#23, thetechgy/DeepThought#1, codeit-momentum/moment-front#132, AnalogStudiosRI/www.blissfestri.com#81 · **anti-pattern:** withastro/astro.build#1031, ant-design/ant-design#54293

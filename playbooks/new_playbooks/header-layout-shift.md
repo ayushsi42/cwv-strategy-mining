@@ -1,17 +1,24 @@
 ---
 issue_type: header-layout-shift
-applicable_flavors: [eds, cs, ams, headless]
+applicable_flavors:
+- eds
+- cs
+- ams
+- headless
 risk_tier: medium
-
 required_validation:
-  - header_element_identified
-  - initial_header_height_measured
-  - no_js_inserted_header_before_paint
-  - nav_toggle_state_traced
-  - sticky_or_fixed_offsets_reviewed
-
+- header_element_identified
+- initial_header_height_measured
+- no_js_inserted_header_before_paint
+- nav_toggle_state_traced
+- sticky_or_fixed_offsets_reviewed
 forbidden_techniques: []
-
+source_prs:
+- adobe-experience-league/exlm#55
+- servicenow-martech/aemeds#8
+- adobecom/milo#3434
+- moCOMOco-main4/frontend#22
+---
 # Header layout shift
 
 > **Risk tier:** medium · **Applies to:** EDS, CS, AMS, Headless · **CWV metric:** CLS

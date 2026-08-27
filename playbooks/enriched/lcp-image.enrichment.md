@@ -26,3 +26,5 @@ When a page has multiple above-the-fold images, mark only the images that are vi
 Use this for carousels, horizontal feeds, and mobile home sections where only the first few items are initially visible.
 
 **Why this is good:** It gives the browser a clear signal for the images that are actually visible on initial load, while keeping the rest of the list lazy-loaded to avoid unnecessary network contention.
+
+> **Source PRs** — **approach:** specklesystems/speckle-server#5278, Crustaly/audemywebsite#297, WilliamAGH/williamcallahan.com#346, guardian/dotcom-rendering#8524, J-P-plan/J-P_FE#9 · **anti-pattern:** woowacourse/perf-basecamp#161

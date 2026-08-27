@@ -29,3 +29,5 @@
 **Why this is bad:** `loading="lazy"` delays the browser’s request for the image until it is near the viewport. If the image is part of the LCP critical chain, lazy-loading can worsen LCP.
 
 Use `loading="lazy"` only for non-critical images.
+
+> **Source PRs** — **approach:** nypublicradio/gothamist-vue3#66, rotationalio/rotational.io#414, aemdemos/gabrielpoalelungi-cola-sta#92

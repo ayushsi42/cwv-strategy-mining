@@ -1,26 +1,17 @@
 ---
 issue_type: footer-render-blocking
-applicable_flavors: [cs, ams]
+applicable_flavors:
+- cs
+- ams
 risk_tier: medium
-
-required_validation:
-  - footer_is_server_rendered_or_templated
-  - footer_visibility_depends_on_js_or_class_toggle
-  - footer_content_present_in_initial_html
-  - footer_cls_risk_confirmed_on_real_page
-
-forbidden_techniques:
-  - pattern: '<footer[^>]*style\s*=\s*"[^"]*(display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0)[^"]*"'
-    reason: "Don't hide the footer with inline styles that keep it out of the initial layout — that can create a late reveal and CLS risk"
-  - pattern: '\.classList\.(add|remove|toggle)\(\s*[\'"](?:is-hidden|hidden|show|visible|loaded)[\'"]\s*\)'
-    reason: "Don't gate footer visibility on a late JS class toggle unless the space is reserved in CSS first"
-  - pattern: 'document\.querySelector\(\s*[\'"]footer[\'"]\)\.style\.(display|visibility|opacity)\s*='
-    reason: "Don't reveal or restyle the footer by mutating inline styles after load — that can shift layout after first paint"
-  - pattern: 'setTimeout\s*\(\s*.*footer'
-    reason: "Don't delay footer reveal with timers — the footer should be stable from initial render, not time-based"
-
+forbidden_techniques: []
+required_validation: []
+source_prs:
+- RetroAchievements/RAWeb#674
+- blackberggroup/va-website-template#3
+- aemsites/momentive#31
+- EuroPython/website#1111
 ---
-
 # Footer render blocking
 
 > **Risk tier:** medium · **Applies to:** CS, AMS · **CWV metric:** CLS
@@ -31,8 +22,7 @@ This issue covers footers that are hidden, unstyled, or only made visible after 
 
 The safe fix is to render the footer in its final layout from the server/template, and if interactivity is needed, toggle only non-layout-affecting states after the space is already reserved.
 
-## When to apply
-
+## When to apply / when to skip
 **Apply when:**
 - The footer is present in the initial HTML but hidden until JS executes
 - Footer styling depends on a script adding classes after load

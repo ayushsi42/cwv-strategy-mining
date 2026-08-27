@@ -57,3 +57,5 @@ export default function decorate(block) {
   header.classList.toggle('has-promo', hasPromo);
 }
 ```
+
+> **Source PRs** — **approach:** keybase/client#25445, plentymarkets/plugin-ceres#3465, guardian/dotcom-rendering#8570, nearform/bioconductor.org#47, SatcherInstitute/health-equity-tracker#1264 · **anti-pattern:** ant-design/ant-design#53522, adobecom/milo#2538

@@ -1,24 +1,38 @@
 ---
 issue_type: tooltip-interaction-lag
-applicable_flavors: [eds, cs, ams, headless]
+applicable_flavors:
+- eds
+- cs
+- ams
+- headless
 risk_tier: medium
-
 required_validation:
-  - tooltip_is_hover_or_focus_driven
-  - tooltip_state_updates_are_localized
-  - no_existing_delay_group_or_debounce_logic
-  - tooltip_close_open_timing_is_testable
-
+- tooltip_is_hover_or_focus_driven
+- tooltip_state_updates_are_localized
+- no_existing_delay_group_or_debounce_logic
+- tooltip_close_open_timing_is_testable
 forbidden_techniques:
-  - pattern: '\bsetTimeout\s*\(\s*[^,]+,\s*(?!0\b)\d{3,}\s*\)'
-    reason: "Don't add long fixed hover delays without a clear cancellation path — they can make pointer interactions feel sluggish and can worsen INP"
-  - pattern: '\bdebounce\s*\('
-    reason: "Don't debounce tooltip hover state updates by default — it can create stale hover state and delayed feedback"
-  - pattern: '\bthrottle\s*\('
-    reason: "Don't throttle tooltip hover state updates — it can leave the active tooltip behind the pointer and feel unresponsive"
-  - pattern: 'delay(Group|Ref|Ms|Time)?\s*[:=]\s*[^;\n]*\b(2\d{2,}|[3-9]\d{2,})\b'
-    reason: "Don't introduce large shared delay-group values — stale timing state is the regression class this playbook is meant to avoid"
-
+- pattern: \bsetTimeout\s*\(\s*[^,]+,\s*(?!0\b)\d{3,}\s*\)
+  reason: Don't add long fixed hover delays without a clear cancellation path — they
+    can make pointer interactions feel sluggish and can worsen INP
+- pattern: \bdebounce\s*\(
+  reason: Don't debounce tooltip hover state updates by default — it can create stale
+    hover state and delayed feedback
+- pattern: \bthrottle\s*\(
+  reason: Don't throttle tooltip hover state updates — it can leave the active tooltip
+    behind the pointer and feel unresponsive
+- pattern: delay(Group|Ref|Ms|Time)?\s*[:=]\s*[^;\n]*\b(2\d{2,}|[3-9]\d{2,})\b
+  reason: Don't introduce large shared delay-group values — stale timing state is
+    the regression class this playbook is meant to avoid
+source_prs:
+- getarcaneapp/arcane#1621
+- mui/base-ui#4887
+- bpmn-io/properties-panel#451
+- broadinstitute/single_cell_portal_core#1640
+- FormidableLabs/victory#2505
+- adobe/spectrum-web-components#4269
+- adobecom/milo#4300
+---
 # Tooltip interaction lag
 
 > **Risk tier:** medium · **Applies to:** EDS, CS, AMS, Headless · **CWV metric:** INP
@@ -27,8 +41,7 @@ forbidden_techniques:
 
 Tooltips that update active state on every rapid pointer move, or that keep stale delay-group timing after a tooltip unmounts, can make hover interactions feel sticky and slow. The goal is to keep tooltip feedback immediate while preventing outdated hover timers or shared delay state from piling up and delaying the next interaction.
 
-## When to apply
-
+## When to apply / when to skip
 **Apply when:**
 - Tooltip open/close state is driven by hover, focus, or pointer-enter/leave events
 - Rapid pointer movement can enqueue repeated tooltip updates

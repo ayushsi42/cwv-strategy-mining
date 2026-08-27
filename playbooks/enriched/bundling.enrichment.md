@@ -44,3 +44,5 @@ export function AlertIcon({ variant }) {
 - Importing from the package root can pull in far more code than the feature needs.
 - It can increase the initial bundle size and parse/execute cost on every page that uses the component.
 - It can make it harder for the bundler to drop unused icons, especially when the catalog is referenced as a namespace object.
+
+> **Source PRs** — **approach:** ant-design/x#1402, datahub-project/datahub#16338, sam-goodwin/itty-aws#62, vlossom-ui/vlossom#117, getsentry/sentry#98296 · **anti-pattern:** n8n-io/n8n#25649, getsentry/sentry#85592, getsentry/gib-potato#275, graphcommerce-org/graphcommerce#1909

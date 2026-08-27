@@ -1,22 +1,31 @@
 ---
 issue_type: large-list-render
-applicable_flavors: [cs, ams, headless]
-risk_tier: medium
-
+applicable_flavors:
+- cs
+- ams
+- headless
+risk_tier: low
 required_validation:
-  - list_source_identified
-  - server_side_pagination_supported
-  - page_param_contract_known
-  - empty_state_behavior_defined
-
+- list_source_identified
+- server_side_pagination_supported
+- page_param_contract_known
+- empty_state_behavior_defined
 forbidden_techniques:
-  - pattern: '<ul[^>]*>\s*(?:<li[^>]*>\s*.*?\s*</li>\s*){51,}</ul>'
-    reason: "Don't keep rendering the full list in one DOM block — paginate or virtualize it so pre-paint work stays bounded"
-  - pattern: 'JSON\.stringify\s*\(\s*[^)]*(?:items|users|projects|results)[^)]*\)'
-    reason: "Don't serialize the full collection into the page payload — return only the current page of results"
-  - pattern: 'pageSize\s*[:=]\s*(?:100|200|500|1000)'
-    reason: "Don't 'fix' the problem by inflating the page size — that preserves the large render and payload cost"
-
+- pattern: <ul[^>]*>\s*(?:<li[^>]*>\s*.*?\s*</li>\s*){51,}</ul>
+  reason: Don't keep rendering the full list in one DOM block — paginate or virtualize
+    it so pre-paint work stays bounded
+- pattern: JSON\.stringify\s*\(\s*[^)]*(?:items|users|projects|results)[^)]*\)
+  reason: Don't serialize the full collection into the page payload — return only
+    the current page of results
+- pattern: pageSize\s*[:=]\s*(?:100|200|500|1000)
+  reason: Don't 'fix' the problem by inflating the page size — that preserves the
+    large render and payload cost
+source_prs:
+- ISPP-12/SarandONGa#617
+- torchbox/torchbox.com#185
+- CDCgov/prime-simplereport#8371
+- awesome-academy/dn_oe61_nodejs-tran-van-duyet#3
+---
 # Large list render
 
 > **Risk tier:** medium · **Applies to:** CS, AMS, Headless · **CWV metric:** LCP, INP
@@ -25,8 +34,7 @@ forbidden_techniques:
 
 Rendering and serializing a long list at once can increase HTML/JSON payload size, DOM work, and client-side diffing or layout cost. Paginating the list reduces pre-paint work and interaction cost, which can improve LCP and INP on list-heavy pages such as projects, users, or team listings.
 
-## When to apply
-
+## When to apply / when to skip
 **Apply when:**
 - The page renders a long collection in one pass and the list is visibly large or unbounded
 - The server or resolver already owns the list data and can return a page slice

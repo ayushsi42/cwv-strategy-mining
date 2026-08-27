@@ -1,18 +1,32 @@
 ---
 issue_type: selector-rerender-churn
-applicable_flavors: [eds, cs, ams, headless]
+applicable_flavors:
+- eds
+- cs
+- ams
+- headless
 risk_tier: medium
-
 required_validation:
-  - identify_broad_subscription_source
-  - confirm_selector_can_be_narrowed
-  - verify_no_state_semantics_change
-  - confirm_render_path_is_client_side
-
+- identify_broad_subscription_source
+- confirm_selector_can_be_narrowed
+- verify_no_state_semantics_change
+- confirm_render_path_is_client_side
 forbidden_techniques:
-  - '(?:.*\buseSelector\s*\(\s*\(\s*state\s*\)\s*=>\s*state\.[A-Za-z0-9_]+\s*\))'
-  - '(?:.*\bReact\.createContext\s*\(\s*\{\s*selection\s*:\s*\{\s*\}\s*,\s*setSelection\s*:\s*\(\s*\)\s*=>\s*\{\s*\}\s*\}\s*\))'
-
+- pattern: (?:.*\buseSelector\s*\(\s*\(\s*state\s*\)\s*=>\s*state\.[A-Za-z0-9_]+\s*\))
+  reason: Matches a known anti-pattern from the source evidence.
+- pattern: (?:.*\bReact\.createContext\s*\(\s*\{\s*selection\s*:\s*\{\s*\}\s*,\s*setSelection\s*:\s*\(\s*\)\s*=>\s*\{\s*\}\s*\}\s*\))
+  reason: Matches a known anti-pattern from the source evidence.
+source_prs:
+- myparcelnl/delivery-options#281
+- vercel/swr#1962
+- AudiusProject/audius-client#1975
+- aave/interface#964
+- elastic/kibana#145234
+- sveltejs/kit#13140
+- mui/mui-x#15627
+- mui/base-ui#1961
+- hashicorp/nomad#12370
+---
 # Selector rerender churn
 
 > **Risk tier:** medium · **Applies to:** EDS, CS, AMS, Headless · **CWV metric:** INP

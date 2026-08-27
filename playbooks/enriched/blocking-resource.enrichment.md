@@ -34,3 +34,5 @@ Use this when Lighthouse coverage shows the main stylesheet is carrying non-crit
 ```
 
 Keep only above-the-fold rules in `critical.css`, and move the rest to a separate stylesheet that loads after first paint.
+
+> **Source PRs** — **approach:** neilotoole/sq#572, martincostello/website#1064, duckduckgo/content-scope-scripts#909, woowacourse/perf-basecamp#126, vikejs/vike#1271

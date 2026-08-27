@@ -1,17 +1,32 @@
 ---
 issue_type: skeleton-loader
-applicable_flavors: [cs, ams, headless]
+applicable_flavors:
+- cs
+- ams
+- headless
 risk_tier: medium
-
 required_validation:
-  - server_rendered_placeholder_exists
-  - removal_trigger_is_data_or_font_ready
-  - placeholder_dimensions_match_final_content
-  - no_existing_page_level_skeleton
-  - no_accessibility_critical_content_hidden
-
+- server_rendered_placeholder_exists
+- removal_trigger_is_data_or_font_ready
+- placeholder_dimensions_match_final_content
+- no_existing_page_level_skeleton
+- no_accessibility_critical_content_hidden
 forbidden_techniques: []
-
+source_prs:
+- vtex-sites/base.store#317
+- x7ddf74479jn5/food-blog#51
+- smartprocure/futil-js#368
+- calcom/cal.com#4484
+- safe-global/web-core#1577
+- hlxsites/choice#21
+- pln-planning-tools/Starmap#309
+- danskernesdigitalebibliotek/dpl-design-system#192
+- okp4/dataverse-portal#167
+- adobe-experience-league/exlm#287
+- Budibase/budibase#12898
+- dailydotdev/apps#2825
+- opencrvs/opencrvs-core#6894
+---
 # Skeleton loader
 
 > **Risk tier:** medium · **Applies to:** CS, AMS, Headless · **CWV metric:** LCP, CLS

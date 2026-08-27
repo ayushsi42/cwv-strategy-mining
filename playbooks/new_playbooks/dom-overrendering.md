@@ -1,22 +1,23 @@
 ---
 issue_type: dom-overrendering
-applicable_flavors: [cs, ams, headless]
+applicable_flavors:
+- cs
+- ams
+- headless
 risk_tier: medium
-
-required_validation:
-  - list_size_and_viewport_confirmed
-  - row_height_or_item_extent_known
-  - virtualization_library_present
-  - sticky_header_and_keyboard_nav_reviewed
-
-forbidden_techniques:
-  - '(?:<li\\b[\\s\\S]*?style=\\{\\{\\s*display:\\s*index\\s*>\\s*\\d+\\s*\\?\\s*[\'"]none[\'"]'
-  - '(?:map\\(|\\*ngFor)[\\s\\S]*?(?:display:\\s*[\'"]none[\'"]|visibility:\\s*[\'"]hidden[\'"])'
-  - 'on(?:Toggle|Remove)=\\{\\(\\)\\s*=>\\s*\\w+\\(.*\\)\\}'
-  - '<Virtuoso[\\s\\S]*?totalCount=\\{[^}]+\\}[\\s\\S]*?itemContent=\\{\\(index\\)\\s*=>\\s*<[^>]+/>\\}'
-
+forbidden_techniques: []
+required_validation: []
+source_prs:
+- greedy-team/react-todo-list#24
+- NextCenturyCorporation/itm-evaluation-dashboard#513
+- hirosystems/stacks-wallet-web#2078
+- input-output-hk/daedalus#2924
+- razorpay/blade#1075
+- ant-design/ant-design#44349
+- rango-exchange/rango-client#474
+- bitwarden/clients#10113
+- WawasCode/adh-app#52
 ---
-
 # DOM overrendering
 
 > **Risk tier:** medium · **Applies to:** CS, AMS, HEADLESS · **CWV metric:** INP, LCP
@@ -25,8 +26,7 @@ forbidden_techniques:
 
 Rendering every row in a large list or table at once creates unnecessary DOM, layout, and paint work. Virtualizing the list keeps only the visible rows mounted, which can reduce initial render cost and make scrolling and selection more responsive.
 
-## When to apply
-
+## When to apply / when to skip
 **Apply when:**
 - The UI renders a long, scrollable list or table with many repeated rows
 - Profiling shows render time, layout, or paint cost growing with item count

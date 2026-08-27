@@ -1,26 +1,25 @@
 ---
 issue_type: service-worker-caching
-applicable_flavors: [cs, ams, headless]
+applicable_flavors:
+- cs
+- ams
+- headless
 risk_tier: medium
-
-required_validation:
-  - service_worker_supported_on_target_flavor
-  - offline_or_repeat_visit_cache_candidate_identified
-  - precache_scope_and_update_strategy_defined
-  - manifest_and_registration_paths_verified
-
-forbidden_techniques:
-  - pattern: 'navigator\.serviceWorker\.register\s*\(\s*[\'"][^\'"]*[\'"]\s*\)\s*;?\s*$'
-    reason: "Don't register a service worker without a caching/offline strategy — registration alone adds complexity without improving repeat-load performance"
-  - pattern: '<link\s+[^>]*rel\s*=\s*[\'"]manifest[\'"]'
-    reason: "Don't add a manifest as the only change — a manifest alone does not cache the app shell or assets"
-  - pattern: 'caches\.open\s*\(\s*[\'"][^\'"]+[\'"]\s*\)\s*;'
-    reason: "Don't cache arbitrary responses without a versioning or invalidation plan — stale assets can outlive deploys"
-  - pattern: 'cacheStorage\.put\s*\(\s*[^,]+,\s*[^)]+\)'
-    reason: "Don't write to Cache Storage without checking response validity and update behavior — opaque or error responses can poison the cache"
-
+forbidden_techniques: []
+required_validation: []
+source_prs:
+- lifeisbeautifu1/modern-react-app#58
+- nasa-gibs/worldview#3803
+- echo-webkom/echo-web-frontend#892
+- alexmojaki/futurecoder#320
+- cse112-sp22-group4/Electric-Pomato#107
+- ElMassimo/iles#127
+- reactplay/react-play#360
+- politics-rewired/Spoke#1359
+- pluralsh/plural#454
+- calovey/FlightApp#1
+- woowacourse/perf-basecamp#112
 ---
-
 # Service worker caching
 
 > **Risk tier:** medium · **Applies to:** CS, AMS, Headless · **CWV metric:** LCP, TTFB
@@ -31,8 +30,7 @@ A service worker can cache the app shell, static assets, and selected runtime re
 
 This is a browser-runtime change, not a markup-only optimization: it affects how requests are intercepted after the page loads, so it needs careful scope, update, and offline behavior.
 
-## When to apply
-
+## When to apply / when to skip
 **Apply when:**
 - The site has a stable app shell or repeat-visit asset set that benefits from offline/runtime caching
 - The target pages are served from a browser app shell or SPA-like shell, or otherwise have a clear static asset set to precache

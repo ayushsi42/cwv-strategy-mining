@@ -9,3 +9,5 @@ When a localization form or selector is discovered late in the document, preload
 ```
 
 Use this only when the stylesheet is on the critical render path and is not already discovered early in `<head>`.
+
+> **Source PRs** — **approach:** Shopify/dawn#2258, QwikDev/qwik#7453, wp-media/wp-rocket#6579, my-zivi/my-zivi#375, canonical/canonical.com#1725

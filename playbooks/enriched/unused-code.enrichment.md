@@ -50,3 +50,5 @@ export function Page() {
 ```
 
 **Why this is bad:** The feature may still be pulled into other pages through a shared shell, clientlib, or block entry point. Removing only one usage does not guarantee the code is globally unused.
+
+> **Source PRs** — **approach:** datahub-project/datahub#16615, Jujulego/jill#1230, LedgerHQ/ledger-live#11714, Automattic/wp-calypso#108174, LedgerHQ/lumen#460 · **anti-pattern:** getsentry/sentry#83982, maplibre/maplibre-gl-js#2198, getsentry/sentry#78236, galacticcouncil/hydration-ui#3622
