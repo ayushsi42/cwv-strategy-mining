@@ -75,41 +75,59 @@ def _with_retry(fn, retries: int = 4):
     raise LLMError(f"request failed after {retries} attempts: {last_err}") from last_err
 
 
+def _post_chat(url: str, headers: dict, payload: dict, timeout: int) -> dict:
+    """POSTs a chat completion. Some newer models -- confirmed live with
+    gpt-5.6-terra, which 400'd on every single call otherwise -- only
+    support the default temperature (1) and reject any explicit override,
+    including 0.0. On that specific error, retry once with `temperature`
+    omitted entirely rather than failing (and, upstream, silently treating
+    every record as a relevance-judgment non-match -- see SESSION_NOTES.md).
+    Any other 400 is left for the caller's normal raise_for_status/LLMError
+    handling, not swallowed here."""
+    resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    if (
+        resp.status_code == 400 and "temperature" in payload
+        and "temperature" in resp.text.lower() and "unsupported_value" in resp.text.lower()
+    ):
+        retry_payload = {k: v for k, v in payload.items() if k != "temperature"}
+        resp = requests.post(url, headers=headers, json=retry_payload, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def _call_openai(system: str, user: str, model: str | None, timeout: int) -> str:
     _ensure_env_loaded()
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise LLMError("OPENAI_API_KEY not set (add it to .env or export it) -- see .env.example")
     model = model or os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
-    resp = requests.post(
+    data = _post_chat(
         "https://api.openai.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={
+        {"Authorization": f"Bearer {api_key}"},
+        {
             "model": model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "temperature": 0.0,
             "response_format": {"type": "json_object"},
         },
-        timeout=timeout,
+        timeout,
     )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    return data["choices"][0]["message"]["content"]
 
 
 def _call_openai_compatible(system: str, user: str, base_url: str, api_key: str, model: str, timeout: int) -> str:
-    resp = requests.post(
+    data = _post_chat(
         f"{base_url.rstrip('/')}/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={
+        {"Authorization": f"Bearer {api_key}"},
+        {
             "model": model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "temperature": 0.0,
             "response_format": {"type": "json_object"},
         },
-        timeout=timeout,
+        timeout,
     )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    return data["choices"][0]["message"]["content"]
 
 
 def _call_claude_cli(system: str, user: str, timeout: int) -> str:
@@ -180,18 +198,17 @@ def complete_text(
         model = model or os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
 
         def _do():
-            resp = requests.post(
+            data = _post_chat(
                 "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key_}"},
-                json={
+                {"Authorization": f"Bearer {api_key_}"},
+                {
                     "model": model,
                     "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                     "temperature": 0.2,
                 },
-                timeout=timeout,
+                timeout,
             )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
+            return data["choices"][0]["message"]["content"]
         return _with_retry(_do)
     elif backend == "claude-cli":
         return _call_claude_cli_text(system, user, timeout)
@@ -201,18 +218,17 @@ def complete_text(
         model = model or os.environ.get("LLM_MODEL_NAME", "")
 
         def _do():
-            resp = requests.post(
+            data = _post_chat(
                 f"{base_url.rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
+                {"Authorization": f"Bearer {api_key}"},
+                {
                     "model": model,
                     "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
                     "temperature": 0.2,
                 },
-                timeout=timeout,
+                timeout,
             )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
+            return data["choices"][0]["message"]["content"]
         return _with_retry(_do)
     raise LLMError(f"unknown backend {backend!r}")
 

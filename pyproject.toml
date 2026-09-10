@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 cwv-playbook-miner = "cwv_playbook_miner.cli:main"
+seo-playbook-miner = "seo_playbook_miner.cli:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

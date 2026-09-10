@@ -46,6 +46,15 @@ PLAYBOOKS_DIR = Path("playbooks")
 
 _HANDOFF = "path to cwv-playbooks-handoff dir (default: cwv-playbooks-handoff)"
 _OUTPUT = "output dir for generated playbooks (default: playbooks/)"
+_RUN_NAME = ("namespace intermediate artifacts (extractions/routing/clusters/enrichments + "
+             "their resume caches) under data/processed/<run-name>/ instead of data/processed/ "
+             "directly -- use this to run the same pipeline under a different judge model without "
+             "clobbering an earlier run's artifacts. Source records (perf_*.jsonl) are always "
+             "shared/unnamespaced since they don't depend on the judge model.")
+
+
+def _run_dir(run_name: str | None) -> Path:
+    return DATA_PROCESSED / run_name if run_name else DATA_PROCESSED
 
 
 def _add_llm_args(p: argparse.ArgumentParser) -> None:
@@ -326,14 +335,16 @@ def cmd_extract(args: argparse.Namespace) -> None:
     from cwv_playbook_miner.extraction.technique_extract import extract_records, write_jsonl
 
     backend = args.backend or resolve_default_backend()
+    run_dir = _run_dir(getattr(args, "run_name", None))
+    run_dir.mkdir(parents=True, exist_ok=True)
     records = _load_all_pr_records()
-    print(f"[extract] loaded {len(records)} source records")
+    print(f"[extract] loaded {len(records)} source records" + (f" (run: {run_dir})" if run_dir != DATA_PROCESSED else ""))
 
     extractions = extract_records(
         records, backend=backend, model=args.model, timeout=args.timeout,
-        workers=args.workers, cache_dir=None if args.no_cache else DATA_PROCESSED / ".technique_extract_cache",
+        workers=args.workers, cache_dir=None if args.no_cache else run_dir / ".technique_extract_cache",
     )
-    out = DATA_PROCESSED / "extractions.jsonl"
+    out = run_dir / "extractions.jsonl"
     write_jsonl(extractions, out)
     n_drop = sum(1 for e in extractions if e.drop)
     print(f"Wrote {len(extractions)} extractions → {out} ({n_drop} dropped, {len(extractions) - n_drop} kept)")
@@ -345,8 +356,10 @@ def cmd_extract_playbooks(args: argparse.Namespace) -> None:
 
     backend = args.backend or resolve_default_backend()
     handoff_dir = Path(args.handoff_dir)
+    run_dir = _run_dir(getattr(args, "run_name", None))
+    run_dir.mkdir(parents=True, exist_ok=True)
     facts = extract_playbook_facts(handoff_dir, backend=backend, model=args.model, timeout=args.timeout)
-    out = DATA_PROCESSED / "playbook_facts.jsonl"
+    out = run_dir / "playbook_facts.jsonl"
     write_jsonl(facts, out)
     print(f"Wrote {len(facts)} playbook facts → {out}")
 
@@ -358,8 +371,9 @@ def cmd_route(args: argparse.Namespace) -> None:
     from cwv_playbook_miner.routing.route import route_records, write_jsonl
 
     backend = args.backend or resolve_default_backend()
-    extractions_path = DATA_PROCESSED / "extractions.jsonl"
-    facts_path = DATA_PROCESSED / "playbook_facts.jsonl"
+    run_dir = _run_dir(getattr(args, "run_name", None))
+    extractions_path = run_dir / "extractions.jsonl"
+    facts_path = run_dir / "playbook_facts.jsonl"
     if not extractions_path.exists():
         raise SystemExit(f"Run `extract` first — {extractions_path} not found.")
     if not facts_path.exists():
@@ -373,9 +387,9 @@ def cmd_route(args: argparse.Namespace) -> None:
         records, extraction_by_id, playbook_facts, Path(args.handoff_dir),
         embed_provider=args.embed_provider, embed_model=args.embed_model, embed_base_url=args.embed_base_url,
         backend=backend, model=args.model, timeout=args.timeout,
-        cache_dir=DATA_PROCESSED / ".route_cache",
+        cache_dir=run_dir / ".route_cache",
     )
-    out = DATA_PROCESSED / "routing.jsonl"
+    out = run_dir / "routing.jsonl"
     write_jsonl(routes, out)
     by_route: dict[str, int] = {}
     for r in routes:
@@ -391,8 +405,9 @@ def cmd_cluster(args: argparse.Namespace) -> None:
     from cwv_playbook_miner.extraction.cluster import cluster_and_label, write_jsonl
 
     backend = args.backend or resolve_default_backend()
-    routing_path = DATA_PROCESSED / "routing.jsonl"
-    extractions_path = DATA_PROCESSED / "extractions.jsonl"
+    run_dir = _run_dir(getattr(args, "run_name", None))
+    routing_path = run_dir / "routing.jsonl"
+    extractions_path = run_dir / "extractions.jsonl"
     if not routing_path.exists():
         raise SystemExit(f"Run `route` first — {routing_path} not found.")
 
@@ -405,7 +420,7 @@ def cmd_cluster(args: argparse.Namespace) -> None:
         embed_provider=args.embed_provider, embed_model=args.embed_model, embed_base_url=args.embed_base_url,
         backend=backend, model=args.model, timeout=args.timeout, min_cluster_size=args.min_cluster_size,
     )
-    out = DATA_PROCESSED / "novel_clusters.jsonl"
+    out = run_dir / "novel_clusters.jsonl"
     write_jsonl(clusters, out)
     print(f"Wrote {len(clusters)} clusters → {out}")
 
@@ -416,16 +431,17 @@ def cmd_enrich_extract(args: argparse.Namespace) -> None:
     from cwv_playbook_miner.routing.route import read_jsonl as read_routing
     from cwv_playbook_miner.extraction.enrich_extract import extract_enrichments, write_jsonl
 
-    routing_path = DATA_PROCESSED / "routing.jsonl"
+    run_dir = _run_dir(getattr(args, "run_name", None))
+    routing_path = run_dir / "routing.jsonl"
     if not routing_path.exists():
         raise SystemExit(f"Run `route` first — {routing_path} not found.")
 
     routing_records = read_routing(routing_path)
-    extraction_by_id = {e.record_id: e for e in read_extractions(DATA_PROCESSED / "extractions.jsonl")}
+    extraction_by_id = {e.record_id: e for e in read_extractions(run_dir / "extractions.jsonl")}
     pr_by_id = {r.id: r for r in _load_all_pr_records()}
 
     evidence = extract_enrichments(routing_records, pr_by_id, extraction_by_id)
-    out = DATA_PROCESSED / "enrichments.jsonl"
+    out = run_dir / "enrichments.jsonl"
     write_jsonl(evidence, out)
     print(f"Wrote {len(evidence)} enrichment evidence records → {out}")
 
@@ -444,7 +460,8 @@ def cmd_generate(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     pr_by_id = {r.id: r for r in _load_all_pr_records()}
 
-    clusters_path = DATA_PROCESSED / "novel_clusters.jsonl"
+    run_dir = _run_dir(getattr(args, "run_name", None))
+    clusters_path = run_dir / "novel_clusters.jsonl"
     if clusters_path.exists():
         clusters = read_clusters(clusters_path)
         print(f"Generating {len(clusters)} new playbooks...")
@@ -459,7 +476,7 @@ def cmd_generate(args: argparse.Namespace) -> None:
             print(f"    → {path}")
 
     if not args.new_only:
-        enrichments_path = DATA_PROCESSED / "enrichments.jsonl"
+        enrichments_path = run_dir / "enrichments.jsonl"
         if enrichments_path.exists():
             enrichments = read_enrichments(enrichments_path)
             print(f"Generating {len(enrichments)} enrichment blocks...")
@@ -526,27 +543,32 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("extract", help="stage 1: rich per-PR technique extraction")
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--no-cache", action="store_true")
+    p.add_argument("--run-name", default=None, help=_RUN_NAME)
     _add_llm_args(p)
     p.set_defaults(func=cmd_extract)
 
     p = sub.add_parser("extract-playbooks", help="stage 1.5: extract facts from the 20 curated playbooks")
     p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF)
+    p.add_argument("--run-name", default=None, help=_RUN_NAME)
     _add_llm_args(p)
     p.set_defaults(func=cmd_extract_playbooks)
 
     p = sub.add_parser("route", help="stage 2: retrieve-then-verify routing")
     p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF)
+    p.add_argument("--run-name", default=None, help=_RUN_NAME)
     _add_llm_args(p)
     _add_embed_args(p)
     p.set_defaults(func=cmd_route)
 
     p = sub.add_parser("cluster", help="stage 3+4: coherence-verified clustering + labeling")
     p.add_argument("--min-cluster-size", type=int, default=4)
+    p.add_argument("--run-name", default=None, help=_RUN_NAME)
     _add_llm_args(p)
     _add_embed_args(p)
     p.set_defaults(func=cmd_cluster)
 
     p = sub.add_parser("enrich-extract", help="stage 5a: diversity-weighted existing-playbook evidence")
+    p.add_argument("--run-name", default=None, help=_RUN_NAME)
     p.set_defaults(func=cmd_enrich_extract)
 
     p = sub.add_parser("generate", help="stage 5b+6: generation with grounding check")
@@ -554,6 +576,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-dir", default=str(PLAYBOOKS_DIR), help=_OUTPUT)
     p.add_argument("--new-only", action="store_true")
     p.add_argument("--overwrite", action="store_true", help="regenerate even if the output file already exists")
+    p.add_argument("--run-name", default=None, help=_RUN_NAME)
     _add_llm_args(p)
     p.set_defaults(func=cmd_generate)
 
@@ -564,6 +587,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--new-only", action="store_true")
     p.add_argument("--overwrite", action="store_true", help="regenerate even if the output file already exists")
+    p.add_argument("--run-name", default=None, help=_RUN_NAME)
     _add_llm_args(p)
     _add_embed_args(p)
     p.set_defaults(func=cmd_playbooks)

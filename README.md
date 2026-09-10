@@ -90,7 +90,10 @@ example that isn't genuinely native to the flavor(s) it's claimed for
 
 ## Results
 
-Full run over the 5-year backfilled source corpus (2021–2026):
+Full run over the 5-year backfilled source corpus (2021–2026), judge model
+`gpt-5.4-mini` (`playbooks/gpt-5.4-mini/`, `data/processed/gpt-5.4-mini/`).
+Numbers below are specific to that run — see `playbooks/<run-name>/` for
+any other judge-model run's own output and its own count.
 
 | Stage | Outcome |
 |---|---:|
@@ -187,26 +190,34 @@ cwv-playbook-miner backfill --start 2021-08-18T00:00:00 --end 2026-08-18T00:00:0
 cwv-playbook-miner enrich-pr-text
 cwv-playbook-miner refetch-truncated
 
-# Pipeline, stage by stage
-cwv-playbook-miner extract --backend openai-compatible --model gpt-5.4-mini
-cwv-playbook-miner extract-playbooks --backend openai-compatible --model gpt-5.4-mini
-cwv-playbook-miner route --backend openai-compatible --model gpt-5.4-mini \
+# Pipeline, stage by stage -- --run-name namespaces extractions/routing/clusters/
+# enrichments (and their resume caches) under data/processed/<run-name>/, so a
+# second run under a different judge model never clobbers an earlier one's
+# artifacts. Source records (perf_*.jsonl) are always shared/unnamespaced.
+cwv-playbook-miner extract --run-name gpt-5.4-mini --backend openai-compatible --model gpt-5.4-mini
+cwv-playbook-miner extract-playbooks --run-name gpt-5.4-mini --backend openai-compatible --model gpt-5.4-mini
+cwv-playbook-miner route --run-name gpt-5.4-mini --backend openai-compatible --model gpt-5.4-mini \
   --embed-provider openai-compatible --embed-model text-embedding-3-small
-cwv-playbook-miner cluster --backend openai-compatible --model gpt-5.4-mini \
+cwv-playbook-miner cluster --run-name gpt-5.4-mini --backend openai-compatible --model gpt-5.4-mini \
   --embed-provider openai-compatible --embed-model text-embedding-3-small
-cwv-playbook-miner enrich-extract
-cwv-playbook-miner generate --backend openai-compatible --model gpt-5.4-mini
+cwv-playbook-miner enrich-extract --run-name gpt-5.4-mini
+cwv-playbook-miner generate --run-name gpt-5.4-mini --output-dir playbooks/gpt-5.4-mini \
+  --backend openai-compatible --model gpt-5.4-mini
 
 # Or chain everything
-cwv-playbook-miner playbooks --backend openai-compatible --model gpt-5.4-mini \
+cwv-playbook-miner playbooks --run-name gpt-5.4-mini --output-dir playbooks/gpt-5.4-mini \
+  --backend openai-compatible --model gpt-5.4-mini \
   --embed-provider openai-compatible --embed-model text-embedding-3-small
 ```
 
 `--workers` controls sourcing/extraction thread-pool size. `extract`,
 `route`, `cluster`, and `generate` are all cache/resume-aware
-(`data/processed/.{technique_extract,route}_cache/`, and `generate` skips
-any output file that already exists unless `--overwrite` is passed) — a
-crashed run can just be re-invoked.
+(`data/processed/<run-name>/.{technique_extract,route}_cache/`, and `generate`
+skips any output file that already exists unless `--overwrite` is passed) —
+a crashed run can just be re-invoked. `--run-name` and `--output-dir` are
+independent flags (nothing derives one from the other) — pass both when
+comparing judge models so neither the intermediate JSONL nor the rendered
+`.md` files from one run overwrite another's.
 
 ## Testing
 
@@ -230,9 +241,15 @@ src/cwv_playbook_miner/
   llm/            shared LLM client (openai / openai-compatible / claude-cli backends,
                   with retry-with-backoff on transient failures)
 data/processed/  every stage's JSONL output (gitignored)
+  perf_*.jsonl        source records -- shared across every judge-model run (model-independent)
+  <run-name>/         extractions/routing/clusters/enrichments + their resume caches for one
+                      run of a given judge model (--run-name; omit for the unnamespaced default)
 playbooks/
-  new_playbooks/  full new {issue_type}.md candidates -- front matter includes source_prs
-  enriched/       new approach/anti-pattern *.enrichment.md blocks for existing playbooks
+  <run-name>/
+    new_playbooks/  full new {issue_type}.md candidates -- front matter includes source_prs
+    enriched/       new approach/anti-pattern *.enrichment.md blocks for existing playbooks
+  (e.g. playbooks/gpt-5.4-mini/, playbooks/gpt-5.6-terra/ -- one subfolder per judge model, so
+  re-running the pipeline under a different model never overwrites an earlier model's output)
 cwv-playbooks-handoff/  the 20 curated playbooks generation reads from; never written to
 docs/pipeline-flow.svg   the diagram above
 docs/hf-dataset-card.md  source of truth for the HF dataset's README (pushed manually)
