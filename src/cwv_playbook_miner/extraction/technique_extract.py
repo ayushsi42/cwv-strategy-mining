@@ -241,10 +241,20 @@ def _run_batched(
     call_fn,
     workers: int,
     label: str,
+    on_batch_done=None,
 ) -> dict[str, object]:
     """Runs call_fn over records in BATCH_SIZE chunks across a thread pool.
     call_fn(batch, backend, model, timeout) -> list[T] | dict[id, dict], both
-    normalized to {record_id: result} here."""
+    normalized to {record_id: result} here.
+
+    on_batch_done(batch, batch_results: dict[id, result]), when given, fires
+    right as each batch's future resolves -- before the next batch even
+    starts -- so a caller can persist results incrementally instead of only
+    after every batch in `records` has finished. Confirmed live this
+    matters: a full 14,965-record extract run got killed by an unrelated
+    system memory event ~25 minutes in, and since the old code only wrote
+    its cache once at the very end, that entire 25 minutes of real, already-
+    paid-for LLM work was lost and had to be redone from zero on restart."""
     batches = [records[s:s + BATCH_SIZE] for s in range(0, len(records), BATCH_SIZE)]
     out: dict[str, object] = {}
     completed = 0
@@ -261,11 +271,14 @@ def _run_batched(
         for future in as_completed(futures):
             batch = futures[future]
             result = future.result()
+            batch_results: dict[str, object] = {}
             if isinstance(result, dict):
-                out.update(result)
+                batch_results = result
             elif isinstance(result, list):
-                for item in result:
-                    out[item.record_id] = item
+                batch_results = {item.record_id: item for item in result}
+            out.update(batch_results)
+            if on_batch_done:
+                on_batch_done(batch, batch_results)
             completed += len(batch)
             print(f"    {label} {completed}/{len(records)}")
     return out
@@ -304,26 +317,72 @@ def extract_records(
         return [r for r in results if r is not None]
 
     pending_records = [r for _, r, _ in pending]
+    cache_key_by_id = {record.id: key for _, record, key in pending}
+
+    # Not-motivated records are fully decided the moment their relevance
+    # batch completes -- write them to cache immediately rather than
+    # waiting for the whole extraction phase (which they never enter) to
+    # also finish. See _run_batched's on_batch_done docstring for why this
+    # matters: without it, a run killed partway through loses everything.
+    def _on_relevance_batch(batch, batch_results):
+        if not cache_dir:
+            return
+        entries = []
+        for record in batch:
+            judgment = batch_results.get(record.id)
+            if judgment is not None and judgment.cwv_motivated:
+                continue  # decided later, once its extraction batch completes
+            ext = TechniqueExtraction(
+                record_id=record.id, drop=True,
+                relevance_reasoning=judgment.reasoning if judgment else "",
+            )
+            entries.append((cache_key_by_id[record.id], ext))
+        if entries:
+            _save_cache(entries, cache_dir)
 
     print(f"  step 1/2: relevance judgment for {len(pending_records)} records")
     relevance_by_id = _run_batched(
         pending_records,
         lambda b: _call_relevance_batch(b, backend, model, timeout),
-        workers, "judged",
+        workers, "judged", on_batch_done=_on_relevance_batch,
     )
 
     motivated_records = [r for r in pending_records if relevance_by_id.get(r.id) and relevance_by_id[r.id].cwv_motivated]
     print(f"  step 1/2 done: {len(motivated_records)}/{len(pending_records)} cwv_motivated, "
           f"proceeding to extraction for those only")
 
+    def _build_extraction(record: PRRecord, item: dict) -> TechniqueExtraction:
+        judgment = relevance_by_id.get(record.id)
+        direction = item.get("direction")
+        if direction not in _VALID_DIRECTIONS:
+            direction = None
+        return TechniqueExtraction(
+            record_id=record.id, drop=False,
+            relevance_reasoning=judgment.reasoning if judgment else "",
+            technique=item.get("technique") or "",
+            mechanism=item.get("mechanism") or "",
+            affected_resource=item.get("affected_resource") or "",
+            render_phase=item.get("render_phase") or "",
+            description=item.get("description") or "",
+            direction=direction,
+        )
+
+    def _on_extraction_batch(batch, batch_results):
+        if not cache_dir:
+            return
+        entries = [
+            (cache_key_by_id[record.id], _build_extraction(record, batch_results.get(record.id, {})))
+            for record in batch
+        ]
+        _save_cache(entries, cache_dir)
+
     print(f"  step 2/2: technique extraction for {len(motivated_records)} records")
     extraction_by_id = _run_batched(
         motivated_records,
         lambda b: _call_batch(b, backend, model, timeout),
-        workers, "extracted",
+        workers, "extracted", on_batch_done=_on_extraction_batch,
     ) if motivated_records else {}
 
-    new_cache_entries: list[tuple[str, TechniqueExtraction]] = []
     for idx, record, cache_key in pending:
         judgment = relevance_by_id.get(record.id)
         if judgment is None or not judgment.cwv_motivated:
@@ -332,25 +391,8 @@ def extract_records(
                 relevance_reasoning=judgment.reasoning if judgment else "",
             )
         else:
-            item = extraction_by_id.get(record.id, {})
-            direction = item.get("direction")
-            if direction not in _VALID_DIRECTIONS:
-                direction = None
-            ext = TechniqueExtraction(
-                record_id=record.id, drop=False,
-                relevance_reasoning=judgment.reasoning,
-                technique=item.get("technique") or "",
-                mechanism=item.get("mechanism") or "",
-                affected_resource=item.get("affected_resource") or "",
-                render_phase=item.get("render_phase") or "",
-                description=item.get("description") or "",
-                direction=direction,
-            )
+            ext = _build_extraction(record, extraction_by_id.get(record.id, {}))
         results[idx] = ext
-        new_cache_entries.append((cache_key, ext))
-
-    if cache_dir and new_cache_entries:
-        _save_cache(new_cache_entries, cache_dir)
 
     return [r for r in results if r is not None]
 
