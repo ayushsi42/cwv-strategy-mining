@@ -1,54 +1,38 @@
-### Remove a confirmed-unused library or feature module
+### Tree-shake icon imports to individual modules
 
-When a dependency or feature is no longer used anywhere, remove the import, entry point, and implementation together. For AEM, also remove any clientlib references or block JS that still pull the code into the page.
+When a library ships many icons but a page uses only a few, import each icon from its own module instead of the package root. This can let the bundler include only the icons actually referenced, instead of pulling in the full icon set.
 
 ```javascript
-// Before
-import moment from 'moment';
-import 'moment-timezone';
+import CheckCircle from './icons/CheckCircle.js';
+import Info from './icons/Info.js';
+import WarningCircle from './icons/WarningCircle.js';
+import X from './icons/X.js';
 
-export function formatDate(value) {
-  return moment(value).format('YYYY-MM-DD');
-}
+import { createElement } from './utils.js';
 
-// After
-export function formatDate(value) {
-  return new Date(value).toISOString().slice(0, 10);
+export function Alert() {
+  return createElement('span', { class: 'icon icon--check-circle', 'aria-hidden': 'true' });
 }
 ```
-
-If the feature is retired entirely, delete the component or module and remove the last root-level reference so it cannot be bundled through a lingering include.
 
 ## Anti-patterns
 
-### Replacing code without removing the old import path
+### Importing the full icon package when only a few icons are used
 
 ```javascript
 // Bad
-import moment from 'moment';
-import dayjs from '@utils/dayjs';
+import CheckCircle from './icons/index.js';
+import Info from './icons/index.js';
+import WarningCircle from './icons/index.js';
+import X from './icons/index.js';
 
-export function formatDate(value) {
-  return dayjs(value).format('YYYY-MM-DD');
+import { createElement } from './utils.js';
+
+export function Alert() {
+  return createElement('span', { class: 'icon icon--check-circle', 'aria-hidden': 'true' });
 }
 ```
 
-**Why this is bad:** The old package is still imported, so the unused bytes remain in the bundle and the page still pays the parse cost. If the goal is to reduce shipped code, remove the obsolete import and any transitive references.
+**Why this is bad:** Importing from a shared module that re-exports the full icon set can pull in more icon code than the page needs, which can increase bundle size.
 
-### Deleting a feature from one page while leaving a shared include in place
-
-```javascript
-// Bad
-export function Page() {
-  return (
-    <>
-      <MainContent />
-      {/* removed here, but still imported in shared shell */}
-    </>
-  );
-}
-```
-
-**Why this is bad:** The feature may still be pulled into other pages through a shared shell, clientlib, or block entry point. Removing only one usage does not guarantee the code is globally unused.
-
-> **Source PRs** — **approach:** datahub-project/datahub#16615, Jujulego/jill#1230, LedgerHQ/ledger-live#11714, Automattic/wp-calypso#108174, LedgerHQ/lumen#460 · **anti-pattern:** getsentry/sentry#83982, maplibre/maplibre-gl-js#2198, getsentry/sentry#78236, galacticcouncil/hydration-ui#3622
+> **Source PRs** — **approach:** datahub-project/datahub#16338, datahub-project/datahub#16615, getsentry/sentry#98296, ecoacoustics/web-components#513, Automattic/wp-calypso#108174 · **anti-pattern:** nader-eloshaiker/screen-geometry-app#479, SolidInvoice/SolidInvoice#1551, galacticcouncil/hydration-ui#3622, expo/expo#24314

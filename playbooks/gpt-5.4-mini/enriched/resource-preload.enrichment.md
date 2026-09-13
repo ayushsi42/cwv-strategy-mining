@@ -1,13 +1,13 @@
-### Preload late-discovered localization form assets
+### Preload critical CSS
 
-When a localization form or selector is discovered late in the document, preload its critical CSS so the browser can fetch it in parallel with HTML parsing.
+When the HTML shell already knows it needs a stable stylesheet before first paint, preload the CSS file from the document and keep the stylesheet link in place so the browser can apply it once fetched.
 
 ```html
 <!-- Good -->
-<link rel="preload" href="/assets/component-localization-form.css" as="style">
-<link rel="stylesheet" href="/assets/component-localization-form.css">
+<link rel="preload" href="/styles/landing.css" as="style">
+<link rel="stylesheet" href="/styles/landing.css">
 ```
 
-Use this only when the stylesheet is on the critical render path and is not already discovered early in `<head>`.
+The preload starts the fetch early; the stylesheet link applies the styles. Both are needed — preload alone doesn't apply the CSS.
 
-> **Source PRs** — **approach:** Shopify/dawn#2258, QwikDev/qwik#7453, wp-media/wp-rocket#6579, my-zivi/my-zivi#375, canonical/canonical.com#1725
+> **Source PRs** — **approach:** ls1intum/Artemis#12541, ParabolInc/parabol#6251, Shopify/dawn#2258, AndreiSalnikov/count-your-spendings#1, nestoririondo/typescript-webshop-front#5

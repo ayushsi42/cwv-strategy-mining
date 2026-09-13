@@ -1,53 +1,38 @@
-### Load martech after a post-LCP event
-
-Use a dedicated post-LCP hook to start non-critical martech and experimentation code after the page has painted its largest content, instead of tying those loads to the initial render path.
+### Queue consent-gated tracking behind a consent-ready event
 
 ```html
-<!-- EDS: fire a custom post-LCP event, then lazy-load martech -->
+<script src="https://cdn.cookielaw.org/scripttemplates/otSDKStub.js" defer></script>
 <script>
-  window.addEventListener('load', () => {
-    const po = new PerformanceObserver((list) => {
-      const entries = list.getEntries();
-      const last = entries[entries.length - 1];
-      if (!last) return;
-
-      window.dispatchEvent(new CustomEvent('post-lcp'));
-      po.disconnect();
-    });
-
-    po.observe({ type: 'largest-contentful-paint', buffered: true });
+  window.consentReady = new Promise((resolve) => {
+    window.addEventListener('consent:granted', resolve, { once: true });
   });
 
-  window.addEventListener('post-lcp', () => {
+  window.consentReady.then(() => {
     const s = document.createElement('script');
-    s.src = '/scripts/martech.js';
+    s.src = 'https://www.google-analytics.com/analytics.js';
     s.async = true;
     document.head.appendChild(s);
-  }, { once: true });
-</script>
-```
-
-This can help when experimentation or analytics can wait until after LCP, so the initial render is not delayed by martech setup.
-
-### Lazy-load non-critical UI instrumentation
-
-If a script is only needed for diagnostics or secondary UI behavior, load it after the main page is interactive rather than in the critical path.
-
-```html
-<!-- CS/AMS: clientlib loaded after initial render -->
-<ui:includeClientLib categories="site.core" />
-<script>
-  window.addEventListener('load', () => {
-    (window.requestIdleCallback || function (cb) { setTimeout(cb, 1); })(() => {
-      const s = document.createElement('script');
-      s.src = '/etc.clientlibs/site/clientlibs/ui-instrumentation.min.js';
-      s.async = true;
-      document.head.appendChild(s);
-    });
   });
 </script>
 ```
 
-This keeps non-essential instrumentation out of the LCP path while still allowing it to run later for monitoring or debugging.
+Use this pattern when the consent manager can load deferred, but analytics or other tracking must not fire until consent is established. The key is gating the tracker on a consent event, not making the consent banner itself synchronous.
 
-> **Source PRs** — **approach:** elastic/kibana#139212, primer/view_components#1830, wp-media/wp-rocket#6459, adobecom/express#930, lumel-websites/wp-lazyload#1 · **anti-pattern:** synapsecns/sanguine#3235, ant-design/ant-design#52300, ant-design/ant-design#52355, adobecom/express#495
+### Lazy-load third-party widgets after initial render
+
+```html
+<script>
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      const s = document.createElement('script');
+      s.src = 'https://livechat.example.com/widget.js';
+      s.async = true;
+      document.head.appendChild(s);
+    }, 3000);
+  });
+</script>
+```
+
+This is appropriate for below-the-fold third-parties such as chat widgets, social embeds, or other non-essential SDKs that can initialize after the page is usable.
+
+> **Source PRs** — **approach:** viscalyx/viscalyx.se#109, woowacourse/perf-basecamp#184, intellieffect/agentic-cms#1, ibenian/algebench#123, elastic/kibana#139212 · **anti-pattern:** ahmadk953/tasko#926, synapsecns/sanguine#3235, ant-design/x#375, ant-design/ant-design#52300

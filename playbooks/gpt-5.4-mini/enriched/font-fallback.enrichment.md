@@ -3,38 +3,104 @@
 ```css
 /* Good */
 @font-face {
-  font-family: 'Josefin Sans';
-  font-style: normal;
-  font-weight: 400;
+  font-family: 'Source Sans Pro';
+  src: url('/assets/sourcesanspro-regular-webfont.woff2') format('woff2');
   font-display: swap;
-  src: url('./fonts/josefin-sans/josefin-sans-400-normal-latin.woff2') format('woff2');
 }
 
 @font-face {
-  font-family: 'Josefin Sans';
-  font-style: italic;
+  font-family: 'Source Sans Pro';
+  src: url('/assets/sourcesanspro-bold-webfont.woff2') format('woff2');
   font-weight: 700;
   font-display: swap;
-  src: url('./fonts/josefin-sans/josefin-sans-700-italic-latin.woff2') format('woff2');
 }
 ```
 
-**Precondition:** any custom `@font-face` without an explicit `font-display` value.  
-**Risk:** none. `swap` can help avoid invisible text while the web font loads.
+**Precondition:** any custom `@font-face` in repo CSS is missing an explicit `font-display` value.
 
-### Avoid invalid `font-style` values in `@font-face`
+**Bad example:**
+```css
+@font-face {
+  font-family: 'Source Sans Pro';
+  src: url('/assets/sourcesanspro-regular-webfont.woff2') format('woff2');
+}
+```
+
+**Why this is bad:** the audit flagged `font-display: block` as a performance issue. Using `swap` allows text to render while the custom font loads, instead of hiding it for a period of time.
+
+### Add a web-safe fallback before the generic family in every `font-family` stack
 
 ```css
-/* Bad */
-@font-face {
-  font-family: 'Josefin Sans';
-  font-style: block;
-  font-weight: 400;
-  font-display: block;
-  src: url('./fonts/josefin-sans/josefin-sans-400-normal-latin.woff2') format('woff2');
+/* Good */
+body {
+  font-family: 'Source Sans Pro', Arial, sans-serif;
+}
+
+h1, h2, h3 {
+  font-family: 'Source Sans Pro', 'Helvetica Neue', Arial, sans-serif;
 }
 ```
 
-**Why this is bad:** `font-style: block` is not a valid value, so the declaration may be ignored or make the face fail to match as intended. `font-display: block` can hide text for a period while the font loads, which may delay text rendering. Use a valid `font-style` such as `normal` or `italic`, and use `font-display: swap` or `optional` instead.
+**Precondition:** any `font-family` declaration that uses a custom font is missing a web-safe fallback before the generic family.
 
-> **Source PRs** — **approach:** woowacourse/perf-basecamp#184, mumendiraneyya/clinic_website#23, thetechgy/DeepThought#1, codeit-momentum/moment-front#132, AnalogStudiosRI/www.blissfestri.com#81 · **anti-pattern:** withastro/astro.build#1031, ant-design/ant-design#54293
+**Bad example:**
+```css
+body {
+  font-family: 'Source Sans Pro', sans-serif;
+}
+```
+
+**Why this is bad:** if the custom font fails to load or is delayed, the browser has fewer fallback options immediately available, which can contribute to a less stable visual experience.
+
+### Add `size-adjust` only when font metric data is available
+
+```css
+/* Good */
+@font-face {
+  font-family: 'Source Sans Pro Fallback';
+  src: local('Arial');
+  size-adjust: 102%;
+  ascent-override: 92%;
+  descent-override: 24%;
+  line-gap-override: 0%;
+}
+
+body {
+  font-family: 'Source Sans Pro', 'Source Sans Pro Fallback', Arial, sans-serif;
+}
+```
+
+**Precondition:** metric data is available for the custom font and no size-adjusted fallback exists yet.
+
+**Bad example:**
+```css
+@font-face {
+  font-family: 'Source Sans Pro Fallback';
+  src: local('Arial');
+  size-adjust: 102%;
+}
+```
+
+**Why this is bad:** `size-adjust` is intended to help align fallback metrics, but by itself it does not include the other metric overrides that can help reduce layout shift.
+
+### Preload critical font files only when the font is already needed for initial render
+
+```html
+<head>
+  <link rel="preload" href="/assets/sourcesanspro-regular-webfont.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
+  <link rel="preload" href="/assets/sourcesanspro-bold-webfont.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
+</head>
+```
+
+**Precondition:** the page uses a custom font on above-the-fold text and the font is already known to be needed for the initial render.
+
+**Bad example:**
+```html
+<head>
+  <link rel="preload" href="/assets/sourcesanspro-regular-webfont.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
+</head>
+```
+
+**Why this is bad:** preloading fonts that are not needed for the initial render can waste bandwidth and compete with more important resources. It should be reserved for fonts that are already on the critical path, such as LCP headings or hero copy.
+
+> **Source PRs** — **approach:** mumendiraneyya/clinic_website#23, cfpb/hmda-frontend#2180, MariaBraganca/ban-berlinarchnet#250, adobe/spectrum-hub#22, cplprince/kingdoms#6

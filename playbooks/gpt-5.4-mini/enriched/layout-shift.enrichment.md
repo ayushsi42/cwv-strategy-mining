@@ -1,61 +1,46 @@
-### Reserve the final rendered size for toggled media/icon variants
+### Reserve a stable placeholder for icon/text swaps
 
-When a component can render different media variants or icon treatments at runtime, reserve the final box up front and keep the variant-specific sizing inside the component tree. This can help prevent a late image/icon swap from changing the component’s outer dimensions after first paint.
+When a control’s affordance changes after data arrives — for example, replacing an icon-only action with a text link, or swapping “Follow”/“Unfollow” labels in place — reserve the final control box up front so the label change doesn’t push adjacent content.
 
 ```html
-<!-- Good — wrapper reserves the expected size -->
-<div class="attachment-shell attachment-shell--video">
-  <img class="attachment-media" src="/media/preview.jpg" alt="" />
+<!-- Good — the action area keeps a stable footprint while the label changes -->
+<div class="attachment-action">
+  <a class="attachment-action__link" href="/downloads/report.pdf">Download</a>
+  <span class="attachment-action__timestamp">Updated 2 hours ago</span>
 </div>
 ```
 
 ```css
-.attachment-shell {
-  width: 100%;
-  min-height: 240px;
-}
-
-.attachment-shell--image {
-  min-height: 180px;
-}
-
-.attachment-media {
-  display: block;
-  width: 100%;
-  height: auto;
-}
-
-.attachment-icon {
-  width: 32px;
-  height: 32px;
-  display: block;
+.attachment-action {
+  min-height: 35px; /* reserve the final control height */
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 ```
 
-### Reserve header/promo height when the header becomes sticky or gains promo content
+### Reserve height for lazy-loaded cards and charts
 
-If a header can switch into a sticky/fixed state or conditionally show a promo bar, reserve the combined header height in the authored layout instead of letting the header collapse and then re-expand on scroll or on viewport changes. This can help keep the scroll transition layout-neutral.
+If a card, chart, map, or similar module renders a loading state first and then expands when data arrives, give the wrapper a real `min-height` that matches the loaded component so the page doesn’t jump when the content hydrates.
+
+```html
+<!-- Good — loading shell and loaded content share the same reserved height -->
+<div class="chart-card">
+  <div class="chart-card__skeleton" aria-hidden="true"></div>
+  <div class="chart-card__content" hidden>
+    <!-- loaded content -->
+  </div>
+</div>
+```
 
 ```css
-/* Good — reserve the full header height up front */
-.global-navigation {
-  min-height: calc(var(--global-height-nav) + var(--global-height-navPromo));
+.chart-card {
+  min-height: 139px;
 }
 
-.global-navigation .aside.promobar {
-  z-index: 1;
-}
-```
-
-```js
-// EDS-style decorate() hook
-export default function decorate(block) {
-  const header = document.querySelector('.global-navigation');
-  if (!header) return;
-
-  const hasPromo = Boolean(block.querySelector('[data-promo]'));
-  header.classList.toggle('has-promo', hasPromo);
+.chart-card__skeleton {
+  min-height: 139px;
 }
 ```
 
-> **Source PRs** — **approach:** keybase/client#25445, plentymarkets/plugin-ceres#3465, guardian/dotcom-rendering#8570, nearform/bioconductor.org#47, SatcherInstitute/health-equity-tracker#1264 · **anti-pattern:** ant-design/ant-design#53522, adobecom/milo#2538
+> **Source PRs** — **approach:** keybase/client#25445, mozilla/bedrock#16009, guardian/dotcom-rendering#8570, SatcherInstitute/health-equity-tracker#1264, vtex-sites/base.store#300

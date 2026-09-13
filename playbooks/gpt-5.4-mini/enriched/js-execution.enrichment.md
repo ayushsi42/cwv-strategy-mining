@@ -1,20 +1,39 @@
-### Lazy-load heavy feature components behind user intent
+### Lazy-load heavy initialization after first paint
 
-When a feature is only needed after a user opens a tab, dialog, or advanced flow, keep its code out of the initial bundle and load it on demand.
+If a feature’s expensive setup is not required for the initial HTML or first paint, move that work out of the critical path and trigger it after render. Use a browser API that runs after the page is interactive, and keep the initial render lightweight.
 
-```js
-// Good — EDS block decorate() loads the heavy feature only when needed
-export default function decorate(block) {
-  const openBtn = block.querySelector('[data-geo-open]');
-  const modalHost = block.querySelector('[data-geo-modal-host]');
-
-  openBtn?.addEventListener('click', async () => {
-    const { default: GeoModal } = await import('./geo-modal.js');
-    GeoModal.mount(modalHost);
+```html
+<!-- Good — defer non-critical initialization until after the initial render -->
+<script>
+  window.addEventListener('load', () => {
+    if ('requestIdleCallback' in window) {
+      requestIdleCallback(() => {
+        initializeHeavyFeature();
+      });
+    } else {
+      setTimeout(() => {
+        initializeHeavyFeature();
+      }, 0);
+    }
   });
-}
+</script>
 ```
 
-This can keep code out of the initial bundle for users who never open the feature, while still allowing the feature to initialize normally once they opt in.
+Use this when the work can safely wait until after the initial render and the UI can show a lightweight placeholder or default state until initialization completes.
 
-> **Source PRs** — **approach:** edbpede/feedback#3, ibenian/algebench#123, 3DStreet/3dstreet#540, elastic/kibana#198240, ustaxcourt/ef-cms#5980 · **anti-pattern:** kamiazya/web-csv-toolbox#551, Ferlab-Ste-Justine/ferlab-ui#513
+### Avoid doing expensive setup during render
+
+If the work is needed only after the page is visible, do not perform it as part of render or synchronous module initialization.
+
+```html
+<!-- Bad — heavy work runs during the critical render path -->
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    initializeHeavyFeature();
+  });
+</script>
+```
+
+**Why this is bad:** Running expensive setup during render or synchronous startup can increase main-thread blocking and delay first paint.
+
+> **Source PRs** — **approach:** atlassian-labs/react-loosely-lazy#94, elastic/kibana#161144, mucommander/mucommander#1044, code-dot-org/code-dot-org#60463, okTurtles/group-income#2357 · **anti-pattern:** kamiazya/web-csv-toolbox#551

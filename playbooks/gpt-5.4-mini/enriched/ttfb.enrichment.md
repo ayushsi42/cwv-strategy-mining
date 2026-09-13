@@ -1,21 +1,55 @@
-### Normalize trailing-slash API routes to avoid redirect-driven duplicate requests
+### Normalize API URLs to avoid redirect-induced duplicate requests
 
-When an API is sensitive to trailing slashes, calling the non-canonical path can trigger a redirect and cause the same logical request to be issued twice. Use the canonical slash-terminated route directly so the client does not pay the extra round trip.
+When an API is sensitive to trailing slashes, call the canonical URL directly so the client does not trigger an extra redirect and repeat the request.
 
 ```js
-// Good — call the canonical route directly
-axios.get(`${this._apiBaseUrl}/projecttags/`, {
+// Good — request the canonical endpoint directly
+fetch(`${this._apiBaseUrl}/projecttags/`, {
   headers: await getAuthorizationHeaders(this._getAccessToken),
 })
 
-axios.get(`${this._apiBaseUrl}/profiles/`, {
+fetch(`${this._apiBaseUrl}/profiles/`, {
   headers: await getAuthorizationHeaders(this._getAccessToken),
-  params: { email },
 })
 
-axios.get(`${this._apiBaseUrl}/projects/${projectId}/${sampleUnitMethod}/${id}/`, {
-  headers: await getAuthorizationHeaders(this._getAccessToken),
-})
+fetch(
+  `${this._apiBaseUrl}/projects/${projectId}/${sampleUnitMethod}/${id}/`,
+  {
+    headers: await getAuthorizationHeaders(this._getAccessToken),
+  },
+)
 ```
 
-> **Source PRs** — **approach:** ogabasseyy/Baci#2479, data-mermaid/mermaid-webapp#891
+This avoids the `.../projecttags` → redirect → `.../projecttags/` pattern that can add extra network round trips and duplicate calls.
+
+### Remove unused state from initialization dependencies
+
+If a hook or initializer does not use a piece of state, remove it from the dependency list so it does not retrigger initialization unnecessarily.
+
+```js
+function App({ dexieCurrentUserInstance }) {
+  const { isOfflineStorageHydrated, syncErrors } = useSyncStatus()
+
+  useInitializeCurrentUser({
+    dexieCurrentUserInstance,
+    isMermaidAuthenticated,
+    isAppOnline,
+    handleHttpResponseErrorWithLogoutAndSetServerNotReachableApplied,
+  })
+}
+```
+
+```js
+export const useInitializeCurrentUser = ({
+  dexieCurrentUserInstance,
+  isMermaidAuthenticated,
+  isAppOnline,
+  handleHttpResponseErrorWithLogoutAndSetServerNotReachableApplied,
+}) => {
+  // ...
+}
+```
+
+This removes an unused dependency from the initialization flow.
+
+> **Source PRs** — **approach:** data-mermaid/mermaid-webapp#891, Automattic/wp-calypso#97958

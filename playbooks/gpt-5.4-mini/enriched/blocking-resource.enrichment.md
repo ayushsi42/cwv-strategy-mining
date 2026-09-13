@@ -1,38 +1,21 @@
-### Critical CSS split with deferred stylesheet loading
+### Split critical and deferred CSS
 
-When a stylesheet contains both above-the-fold and below-the-fold rules, split it so the critical rules are delivered immediately and the rest is loaded after first paint.
+When a stylesheet is large but only part of it is needed for first paint, split it into a small critical file that loads immediately and a deferred file for below-the-fold styles. This can help the render path and initial rendering.
 
 ```html
-<!-- Good: critical CSS is render-blocking, deferred CSS is loaded separately -->
+<!-- Good -->
 <link rel="stylesheet" href="/styles/critical.css">
 <link rel="preload" href="/styles/deferred.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
 <noscript><link rel="stylesheet" href="/styles/deferred.css"></noscript>
 ```
 
-Use this when Lighthouse coverage shows the main stylesheet is carrying non-critical rules that can be moved out of the critical path.
-
-## Anti-patterns
-
-### Loading a full stylesheet with the print-onload swap hack
+### Avoid async CSS loading that causes flash of unstyled content
 
 ```html
-<!-- Bad: swaps a stylesheet from print to all after load -->
-<link rel="stylesheet" href="/styles/app.css" media="print" onload="this.media='all'">
+<!-- Bad -->
+<link rel="stylesheet" href="/styles/main.css" media="print" onload="this.media='all'">
 ```
 
-**Why this is bad:** This can delay stylesheet application and may interfere with print behavior or create inconsistent rendering. Use a real critical CSS split instead.
+**Why this is bad:** It delays the stylesheet until after initial render, which can produce a flash of unstyled content and layout shift when the CSS finally applies.
 
-## Recommended approaches
-
-### Split critical and non-critical CSS
-
-```html
-<!-- Good -->
-<link rel="stylesheet" href="/styles/critical.css">
-<link rel="preload" href="/styles/non-critical.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
-<noscript><link rel="stylesheet" href="/styles/non-critical.css"></noscript>
-```
-
-Keep only above-the-fold rules in `critical.css`, and move the rest to a separate stylesheet that loads after first paint.
-
-> **Source PRs** — **approach:** neilotoole/sq#572, martincostello/website#1064, duckduckgo/content-scope-scripts#909, woowacourse/perf-basecamp#126, vikejs/vike#1271
+> **Source PRs** — **approach:** neilotoole/sq#572, cashapp/misk#2800, vikejs/vike#1271, adobecom/milo#133, adobecom/milo#2533 · **anti-pattern:** mempool/mempool#806
