@@ -1,92 +1,165 @@
-applicable_flavors for the playbook this content is being added to: ['eds', 'cs', 'ams']
-
-### Do not eagerly load optional Worker or WASM features
-
-**Bad — CS/AMS: loading optional feature bootstrap from a site-wide clientlib**
-
-```xml
-<!-- /apps/site/clientlibs/clientlib-site/.content.xml -->
-<jcr:root xmlns:jcr="http://www.jcp.org/jcr/1.0"
-          jcr:primaryType="cq:ClientLibraryFolder"
-          categories="[site.base]"
-          allowProxy="{Boolean}true"/>
-```
-
-```text
-# /apps/site/clientlibs/clientlib-site/js.txt
-
-agent/ai-engine.js
-```
+### Offloading every operation to a Web Worker
 
 ```javascript
-// agent/ai-engine.js — runs on every page that loads site.base
-const worker = new Worker(
-  '/etc.clientlibs/site/clientlibs/clientlib-site/resources/route-worker.js',
-);
-
-worker.postMessage({ type: 'load-model' });
-```
-
-**Why this is bad:** Workers can offload work from the main thread, which can help keep the UI responsive. However, this code creates the Worker and initializes the feature whenever the global clientlib loads, including on pages where the feature is not used.
-
-**Good — load the feature from the component interaction that needs it**
-
-```html
-<!-- CS/AMS component HTL -->
-<sly
-  data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html"
-  data-sly-call="${clientlib.js @ categories='site.route-assistant'}" />
-```
-
-```xml
-<!-- /apps/site/clientlibs/clientlib-route-assistant/.content.xml -->
-<jcr:root xmlns:jcr="http://www.jcp.org/jcr/1.0"
-          jcr:primaryType="cq:ClientLibraryFolder"
-          categories="[site.route-assistant]"
-          allowProxy="{Boolean}true"/>
-```
-
-```text
-# /apps/site/clientlibs/clientlib-route-assistant/js.txt
-
-agent/ai-engine.js
-```
-
-```javascript
-// agent/ai-engine.js — runs only when the component is present
-document.querySelectorAll('[data-route-assistant]').forEach((component) => {
-  component.querySelector('button').addEventListener('click', () => {
-    const worker = new Worker(
-      '/etc.clientlibs/site/clientlibs/clientlib-route-assistant/resources/route-worker.js',
-    );
-
-    worker.postMessage({ type: 'load-model' });
-  }, { once: true });
-});
-```
-
-```javascript
-// EDS block decoration — load optional code only after interaction
-export default function decorate(block) {
-  const button = block.querySelector('button');
-
-  button.addEventListener('click', async () => {
-    const { startRouteAssistant } = await import('./route-assistant.js');
-    startRouteAssistant(block);
-  }, { once: true });
-}
-```
-
-```javascript
-// route-assistant.js
-export function startRouteAssistant(block) {
+// EDS: blocks/csv-viewer/csv-viewer.js
+// Bad — every block instance starts its own worker.
+export default async function decorate(block) {
+  const { renderTable } = await import('./render.js');
   const worker = new Worker(
-    new URL('./route-worker.js', import.meta.url),
+    new URL('./parser.worker.js', import.meta.url),
     { type: 'module' },
   );
 
-  worker.postMessage({ type: 'load-model' });
+  const source = block.querySelector('textarea');
+  source.addEventListener('input', () => {
+    worker.postMessage({ csv: source.value });
+  });
+
+  worker.onmessage = ({ data }) => renderTable(block, data.rows);
 }
+
+// CS/AMS: ui.apps/.../clientlibs/csv-viewer/.content.xml
+// <jcr:root xmlns:jcr="http://www.jcp.org/jcr/1.0"
+//   xmlns:nt="http://www.jcp.org/jcr/nt/1.0"
+//   jcr:primaryType="cq:ClientLibraryFolder"
+//   categories="[site.csv-viewer]"/>
+
+// CS/AMS: ui.apps/.../components/csv-viewer/csv-viewer.html
+// <sly data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html"/>
+// <sly data-sly-call="${clientlib.js @ categories='site.csv-viewer'}"/>
+// <div class="csv-viewer"
+//      data-worker-url="/etc.clientlibs/site/clientlibs/csv-viewer/resources/parser.worker.js">
+//   <textarea class="csv-viewer__source"></textarea>
+//   <div class="csv-viewer__output"></div>
+// </div>
+
+// CS/AMS: ui.apps/.../clientlibs/csv-viewer/js/csv-viewer.js
+// Bad — each rendered component creates its own worker.
+document.querySelectorAll('.csv-viewer').forEach((viewer) => {
+  const worker = new Worker(viewer.dataset.workerUrl, { type: 'module' });
+  const source = viewer.querySelector('.csv-viewer__source');
+
+  source.addEventListener('input', () => {
+    worker.postMessage({ csv: source.value });
+  });
+
+  worker.onmessage = ({ data }) => renderTable(viewer, data.rows);
+});
+```
+
+**Why this is bad:** Worker execution is intended to offload parsing from the main thread, particularly for large CSV files where keeping the UI responsive is beneficial. Using a separate worker for every block instance is not necessary when a single worker can handle multiple concurrent parsing requests.
+
+### Use a worker for substantial CSV parsing
+
+Create a worker when parsing work should be moved off the main thread. Reuse the worker for requests from the block.
+
+```javascript
+// EDS: blocks/csv-viewer/parser-client.js
+let worker;
+let nextRequestId = 0;
+const pendingRequests = new Map();
+
+function getWorker() {
+  if (!worker) {
+    worker = new Worker(
+      new URL('./parser.worker.js', import.meta.url),
+      { type: 'module' },
+    );
+
+    worker.onmessage = ({ data }) => {
+      const resolve = pendingRequests.get(data.requestId);
+
+      if (resolve) {
+        pendingRequests.delete(data.requestId);
+        resolve(data.rows);
+      }
+    };
+  }
+
+  return worker;
+}
+
+export function parseCsv(csv) {
+  const requestId = nextRequestId;
+  nextRequestId += 1;
+
+  return new Promise((resolve) => {
+    pendingRequests.set(requestId, resolve);
+    getWorker().postMessage({ csv, requestId });
+  });
+}
+
+// EDS: blocks/csv-viewer/csv-viewer.js
+export default async function decorate(block) {
+  const [{ parseCsv }, { renderTable }] = await Promise.all([
+    import('./parser-client.js'),
+    import('./render.js'),
+  ]);
+
+  const source = block.querySelector('textarea');
+  let latestRequestId = 0;
+
+  source.addEventListener('input', async () => {
+    const requestId = latestRequestId + 1;
+    latestRequestId = requestId;
+
+    const rows = await parseCsv(source.value);
+
+    if (requestId === latestRequestId) {
+      renderTable(block, rows);
+    }
+  });
+}
+
+// CS/AMS: ui.apps/.../clientlibs/csv-viewer/js/csv-viewer.js
+(() => {
+  let worker;
+  let nextRequestId = 0;
+  const pendingRequests = new Map();
+
+  function getWorker(workerUrl) {
+    if (!worker) {
+      worker = new Worker(workerUrl, { type: 'module' });
+
+      worker.onmessage = ({ data }) => {
+        const resolve = pendingRequests.get(data.requestId);
+
+        if (resolve) {
+          pendingRequests.delete(data.requestId);
+          resolve(data.rows);
+        }
+      };
+    }
+
+    return worker;
+  }
+
+  function parseCsv(csv, workerUrl) {
+    const requestId = nextRequestId;
+    nextRequestId += 1;
+
+    return new Promise((resolve) => {
+      pendingRequests.set(requestId, resolve);
+      getWorker(workerUrl).postMessage({ csv, requestId });
+    });
+  }
+
+  document.querySelectorAll('.csv-viewer').forEach((viewer) => {
+    const source = viewer.querySelector('.csv-viewer__source');
+    let latestRequestId = 0;
+
+    source.addEventListener('input', async () => {
+      const requestId = latestRequestId + 1;
+      latestRequestId = requestId;
+
+      const rows = await parseCsv(source.value, viewer.dataset.workerUrl);
+
+      if (requestId === latestRequestId) {
+        renderTable(viewer, rows);
+      }
+    });
+  });
+})();
 ```
 
 > **Source PRs** — **approach:** JULIANJUAREZMX01/MueveCancun#492, IDEMSInternational/parenting-app-ui#1926, osmosis-labs/osmosis-frontend#1936, rhysmorgan134/node-CarPlay#17, code-dot-org/code-dot-org#60463 · **anti-pattern:** kamiazya/web-csv-toolbox#551

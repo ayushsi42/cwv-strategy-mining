@@ -47,6 +47,18 @@ class LLMError(RuntimeError):
     pass
 
 
+class _EmptyCompletionError(Exception):
+    """Raised when a chat completion returns 200 OK with empty/whitespace
+    message content. Confirmed live with gpt-5.6-terra: identical input,
+    retried with no changes, sometimes returns real content and sometimes
+    an empty string (finish_reason "stop", real completion_tokens usage,
+    just nothing in the visible content field) -- looks like a reasoning-
+    token-budget model occasionally spending its whole budget on hidden
+    reasoning and leaving nothing for the answer. Treated as a transient,
+    retryable failure rather than a valid (if unhelpful) response, since a
+    bare retry on the same input is what actually produced content."""
+
+
 def _with_retry(fn, retries: int = 4):
     """Retries on transient network/server errors (connection blips, 5xx,
     429, timeouts) with exponential backoff -- observed live this session
@@ -70,6 +82,8 @@ def _with_retry(fn, retries: int = 4):
             last_err = exc
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
             last_err = exc
+        except _EmptyCompletionError as exc:
+            last_err = exc
         if attempt < retries - 1:
             _time.sleep(2 ** attempt)
     raise LLMError(f"request failed after {retries} attempts: {last_err}") from last_err
@@ -83,7 +97,11 @@ def _post_chat(url: str, headers: dict, payload: dict, timeout: int) -> dict:
     omitted entirely rather than failing (and, upstream, silently treating
     every record as a relevance-judgment non-match -- see SESSION_NOTES.md).
     Any other 400 is left for the caller's normal raise_for_status/LLMError
-    handling, not swallowed here."""
+    handling, not swallowed here.
+
+    Also raises _EmptyCompletionError on a 200 with empty message content
+    (see that class's docstring) so _with_retry retries it like any other
+    transient failure instead of the empty string silently propagating."""
     resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
     if (
         resp.status_code == 400 and "temperature" in payload
@@ -92,7 +110,12 @@ def _post_chat(url: str, headers: dict, payload: dict, timeout: int) -> dict:
         retry_payload = {k: v for k, v in payload.items() if k != "temperature"}
         resp = requests.post(url, headers=headers, json=retry_payload, timeout=timeout)
     resp.raise_for_status()
-    return resp.json()
+    data = resp.json()
+    content = (data.get("choices") or [{}])[0].get("message", {}).get("content")
+    if not content or not content.strip():
+        raise _EmptyCompletionError(f"empty completion content (finish_reason="
+                                     f"{(data.get('choices') or [{}])[0].get('finish_reason')!r})")
+    return data
 
 
 def _call_openai(system: str, user: str, model: str | None, timeout: int) -> str:

@@ -1,95 +1,76 @@
-applicable_flavors for the playbook this content is being added to: ['eds', 'cs', 'ams']
+### Delay unit-value parsing until typing pauses
 
-### Delay unit-value parsing while typing
+Use this as a reviewer-guided fix for unit inputs where parsing while typing modifies input values, particularly for invalid or formatted intermediate values such as `096`.
 
-For unit-value inputs, delay parsing until after the user pauses typing. The referenced change adds debounced input handling and delays `UnitInput` parsing to avoid modifying input values while they are being entered.
-
-#### Behavior to avoid: parse and validate on every keystroke
+**Anti-pattern: Parse and reformat on every keystroke**
 
 ```javascript
-// blocks/unit-input/unit-input.js (EDS)
+// EDS: blocks/unit-input/unit-input.js
 export default function decorate(block) {
-  const input = block.querySelector('input');
-  const output = block.querySelector('[data-unit-output]');
+  const input = block.querySelector('input[data-unit-input]');
 
-  input.addEventListener('input', () => {
-    const parsedValue = parseUnitValue(input.value);
-    const validation = validateUnitValue(parsedValue);
-
-    output.textContent = validation.valid
-      ? formatUnitValue(parsedValue.value)
-      : validation.message;
+  input.addEventListener('input', ({ target }) => {
+    const parsedValue = parseUnitValue(target.value);
+    updateUnitSummary(block, parsedValue);
   });
 }
 
-// clientlibs/unit-input/js/unit-input.js (CS/AMS)
+// CS/AMS: /apps/example/clientlibs/clientlib-unit-input/js/unit-input.js
 (() => {
-  document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('.unit-input').forEach((container) => {
-      const input = container.querySelector('input');
-      const output = container.querySelector('[data-unit-output]');
+  document.querySelectorAll('[data-unit-input-block]').forEach((block) => {
+    const input = block.querySelector('input[data-unit-input]');
+    if (!input) return;
 
-      input.addEventListener('input', () => {
-        const parsedValue = parseUnitValue(input.value);
-        const validation = validateUnitValue(parsedValue);
-
-        output.textContent = validation.valid
-          ? formatUnitValue(parsedValue.value)
-          : validation.message;
-      });
+    input.addEventListener('input', ({ target }) => {
+      const parsedValue = parseUnitValue(target.value);
+      updateUnitSummary(block, parsedValue);
     });
   });
 })();
 ```
 
-**Why avoid this:** parsing and related value handling can run for intermediate values while the user is still typing. For unit inputs, this can modify invalid or formatted intermediate values before entry is complete.
+**Why this is bad:** Parsing runs for every keystroke, including invalid or formatted intermediate values. Parsing while typing can modify the input value before the user has finished entering it.
 
-#### Approach: debounce unit-value parsing
+**Approach: Debounce parsing until typing pauses**
 
 ```javascript
-// blocks/unit-input/unit-input.js (EDS)
+// EDS: blocks/unit-input/unit-input.js
 export default function decorate(block) {
-  const input = block.querySelector('input');
-  const output = block.querySelector('[data-unit-output]');
-  let parseTimer;
+  const input = block.querySelector('input[data-unit-input]');
+  if (!input) return;
 
-  input.addEventListener('input', () => {
-    window.clearTimeout(parseTimer);
+  let debounceTimer;
 
-    parseTimer = window.setTimeout(() => {
-      const parsedValue = parseUnitValue(input.value);
+  input.addEventListener('input', ({ target }) => {
+    const rawValue = target.value;
 
-      if (parsedValue.valid) {
-        output.textContent = formatUnitValue(parsedValue.value);
-      }
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      const parsedValue = parseUnitValue(rawValue);
+      updateUnitSummary(block, parsedValue);
     }, 500);
   });
 }
 
-// clientlibs/unit-input/js/unit-input.js (CS/AMS)
+// CS/AMS: /apps/example/clientlibs/clientlib-unit-input/js/unit-input.js
 (() => {
-  document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('.unit-input').forEach((container) => {
-      const input = container.querySelector('input');
-      const output = container.querySelector('[data-unit-output]');
-      let parseTimer;
+  document.querySelectorAll('[data-unit-input-block]').forEach((block) => {
+    const input = block.querySelector('input[data-unit-input]');
+    if (!input) return;
 
-      input.addEventListener('input', () => {
-        window.clearTimeout(parseTimer);
+    let debounceTimer;
 
-        parseTimer = window.setTimeout(() => {
-          const parsedValue = parseUnitValue(input.value);
+    input.addEventListener('input', ({ target }) => {
+      const rawValue = target.value;
 
-          if (parsedValue.valid) {
-            output.textContent = formatUnitValue(parsedValue.value);
-          }
-        }, 500);
-      });
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const parsedValue = parseUnitValue(rawValue);
+        updateUnitSummary(block, parsedValue);
+      }, 500);
     });
   });
 })();
 ```
-
-Delay parsing while the user types so intermediate or temporarily invalid values are not rewritten during entry. The referenced `UnitInput` change uses a default delay of 500 ms.
 
 > **Source PRs** — **approach:** rancher/dashboard#5670

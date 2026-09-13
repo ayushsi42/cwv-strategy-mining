@@ -182,12 +182,51 @@ Output ONLY the complete, corrected Markdown document, identical to the input ex
 example needed AEM-native translation. No commentary."""
 
 
+_AEM_FIDELITY_FAILURE_PHRASES = (
+    "please provide", "please share", "please paste", "could you provide",
+    "could you share", "can you provide", "can you share", "i need the",
+    "i don't see", "i do not see", "no markdown content", "no content was provided",
+    "you haven't provided", "you have not provided",
+)
+
+
+def _looks_like_failed_aem_check(original: str, response: str) -> bool:
+    """Never trust a check response blindly -- confirmed live (gpt-5.6-terra)
+    that a judge model can return a bare clarifying question ("Please
+    provide the Markdown content...") instead of doing the task, and that
+    garbage was previously saved as the file's entire content. A response
+    this much shorter than the input, or that opens with a clarifying-
+    question phrase, is treated as a failed call, not a valid edit."""
+    response = response.strip()
+    if not response:
+        return True
+    if len(response) < 0.3 * len(original.strip()):
+        return True
+    return response[:200].lower().startswith(_AEM_FIDELITY_FAILURE_PHRASES)
+
+
 def _aem_fidelity_check(text: str, backend: str, model: str | None, timeout: int, flavors_note: str = "") -> str:
     """flavors_note is only needed for enrichment blocks, which have no
     front matter of their own to read applicable_flavors from -- new
-    playbooks carry that in the document text itself."""
-    user = f"{flavors_note}\n\n{text}" if flavors_note else text
-    checked = complete_text(_AEM_FIDELITY_SYSTEM, user, backend=backend, model=model, timeout=timeout)
+    playbooks carry that in the document text itself.
+
+    flavors_note is passed via the SYSTEM prompt, never prepended to the
+    user content: confirmed live that prepending it to the document text
+    made gpt-5.6-terra echo that instructional line back as if it were part
+    of the document (leaked into 14/17 saved enrichment files) -- gpt-5.4-
+    mini happened not to, but nothing in the original prompt actually told
+    either model the line wasn't part of the document to preserve."""
+    system = _AEM_FIDELITY_SYSTEM
+    if flavors_note:
+        system += (
+            "\n\nThis document is an enrichment fragment with no YAML front matter of its "
+            f"own. {flavors_note}. This sentence is context for you only -- it is NOT part "
+            "of the document; never include it, or any paraphrase of it, in your output."
+        )
+    checked = complete_text(system, text, backend=backend, model=model, timeout=timeout)
+    if _looks_like_failed_aem_check(text, checked):
+        print(f"    [aem-fidelity] check returned an unusable response, keeping input unchanged: {checked[:120]!r}")
+        return text
     return _extract_document(checked) if "---" in checked[:50] else checked.strip()
 
 

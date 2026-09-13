@@ -1,336 +1,330 @@
-applicable_flavors for the playbook this content is being added to: ['eds', 'cs']
+### Use shape-matched skeletons for async EDS blocks
 
-### Use geometry-matched skeletons while async block data loads
-
-When a block fetches data before rendering cards, rows, or controls, consider rendering a skeleton or
-placeholder while data is unavailable. Reserve space that is appropriate for the eventual content,
-especially when replacing a small loading indicator with a wider form, grid, or list.
-
-Use the same layout classes for the loading and loaded states where practical.
+A spinner or centered “Loading…” message may not reserve the footprint of the final card grid, form, or widget. When fetched content replaces it, the container can grow and shift content below it.
 
 ```js
 // EDS: blocks/models/models.js
-import { createTag } from '../../scripts/aem.js';
+// Bad — the spinner may not reserve the final grid's space
+function renderModelsGrid(models) {
+  const grid = document.createElement('ul');
+  grid.className = 'models-grid';
 
-function createSkeletonCard() {
-  const card = createTag('li', {
-    class: 'models-card models-card-skeleton',
-    'aria-hidden': 'true',
+  models.forEach((model) => {
+    const item = document.createElement('li');
+    item.className = 'model-card';
+    item.textContent = model.title;
+    grid.append(item);
   });
 
-  card.append(
-    createTag('div', { class: 'models-card-media' }),
-    createTag('div', { class: 'models-card-line models-card-line-title' }),
-    createTag('div', { class: 'models-card-line' }),
-    createTag('div', { class: 'models-card-line models-card-line-short' }),
-  );
+  return grid;
+}
+
+export default async function decorate(block) {
+  block.innerHTML = '<p class="loading">Loading models…</p>';
+
+  const response = await fetch('/models.json');
+  const models = await response.json();
+
+  block.replaceChildren(renderModelsGrid(models));
+}
+
+// CS: clientlibs/site/models/models.js
+// Bad — this clientlib is loaded through the site.models category
+(() => {
+  function renderModelsGrid(models) {
+    const grid = document.createElement('ul');
+    grid.className = 'models-grid';
+
+    models.forEach((model) => {
+      const item = document.createElement('li');
+      item.className = 'model-card';
+      item.textContent = model.title;
+      grid.append(item);
+    });
+
+    return grid;
+  }
+
+  async function loadModels(block) {
+    block.innerHTML = '<p class="loading">Loading models…</p>';
+
+    const endpoint = block.dataset.modelsEndpoint || '/models.json';
+    const response = await fetch(endpoint);
+    const models = await response.json();
+
+    block.replaceChildren(renderModelsGrid(models));
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.models').forEach(loadModels);
+  });
+})();
+```
+
+**Why this is bad:** If the loading message is much smaller than the loaded card grid, replacing it can expand the block after first render and shift content below it.
+
+Render a skeleton with the same grid columns, image ratio, padding, and bounded text rows as the loaded component. Build it before awaiting the data request.
+
+```js
+// EDS: blocks/models/models.js
+// Good — skeleton cards reserve approximately the same geometry as loaded cards
+function createElement(tag, className) {
+  const element = document.createElement(tag);
+  element.className = className;
+  return element;
+}
+
+function createCardSkeleton() {
+  const card = createElement('li', 'model-card model-card-skeleton');
+  card.setAttribute('aria-hidden', 'true');
+
+  const image = createElement('div', 'model-card-image skeleton-shimmer');
+  const content = createElement('div', 'model-card-content');
+
+  const title = createElement('div', 'skeleton-line skeleton-line-title skeleton-shimmer');
+  const meta = createElement('div', 'skeleton-line skeleton-line-meta skeleton-shimmer');
+  const action = createElement('div', 'skeleton-line skeleton-line-action skeleton-shimmer');
+
+  content.append(title, meta, action);
+  card.append(image, content);
 
   return card;
 }
 
-function createTextElement(tagName, className, text) {
-  const element = createTag(tagName, { class: className });
-  element.textContent = text || '';
-  return element;
-}
-
 function renderModelCard(model) {
-  const card = createTag('li', { class: 'models-card' });
-  const media = createTag('div', { class: 'models-card-media' });
+  const card = createElement('li', 'model-card');
 
-  if (model.image) {
-    const image = createTag('img', {
-      src: model.image,
-      alt: model.imageAlt || '',
-      loading: 'lazy',
-    });
-    media.append(image);
-  }
+  const image = document.createElement('img');
+  image.className = 'model-card-image';
+  image.src = model.image;
+  image.alt = model.title;
+  image.width = 640;
+  image.height = 360;
 
-  card.append(
-    media,
-    createTextElement('h3', 'models-card-title', model.name),
-    createTextElement('p', 'models-card-description', model.description),
-  );
+  const content = createElement('div', 'model-card-content');
+  const title = document.createElement('h3');
+  title.className = 'model-card-title';
+  title.textContent = model.title;
+
+  const meta = document.createElement('p');
+  meta.className = 'model-card-meta';
+  meta.textContent = model.category;
+
+  content.append(title, meta);
+  card.append(image, content);
 
   return card;
 }
 
 export default async function decorate(block) {
-  const list = createTag('ul', {
-    class: 'models-list models-list-skeleton',
-    'aria-busy': 'true',
-  });
+  const placeholderCount = Math.max(block.querySelectorAll(':scope > div').length, 1);
+  const grid = document.createElement('ul');
 
-  const skeletonCount = 6;
-  Array.from({ length: skeletonCount }, createSkeletonCard).forEach((card) => list.append(card));
-  block.replaceChildren(list);
+  grid.className = 'models-grid';
+  grid.setAttribute('aria-busy', 'true');
+
+  for (let index = 0; index < placeholderCount; index += 1) {
+    grid.append(createCardSkeleton());
+  }
+
+  block.replaceChildren(grid);
 
   const response = await fetch('/models.json');
   if (!response.ok) throw new Error(`Unable to load models: ${response.status}`);
 
-  const { data: models } = await response.json();
-
-  list.classList.remove('models-list-skeleton');
-  list.removeAttribute('aria-busy');
-  list.replaceChildren(...models.map(renderModelCard));
+  const models = await response.json();
+  grid.replaceChildren(...models.map(renderModelCard));
+  grid.removeAttribute('aria-busy');
 }
-```
 
-```html
-<!-- CS: ui.apps/src/main/content/jcr_root/apps/example/components/models/models.html -->
-<sly
-  data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html"
-  data-sly-call="${clientlib.css @ categories='example.models'}"></sly>
-
-<div
-  class="models"
-  data-models-endpoint="${properties.modelsEndpoint @ context='uri'}">
-</div>
-
-<sly data-sly-call="${clientlib.js @ categories='example.models'}"></sly>
-```
-
-```xml
-<!-- CS: ui.apps/src/main/content/jcr_root/apps/example/clientlibs/models/.content.xml -->
-<?xml version="1.0" encoding="UTF-8"?>
-<jcr:root
-    xmlns:jcr="http://www.jcp.org/jcr/1.0"
-    xmlns:nt="http://www.jcp.org/jcr/nt/1.0"
-    jcr:primaryType="cq:ClientLibraryFolder"
-    categories="[example.models]"
-    allowProxy="{Boolean}true"/>
-```
-
-```js
-// CS: ui.apps/src/main/content/jcr_root/apps/example/clientlibs/models/models.js
+// CS: clientlibs/site/models/models.js
+// Good — this clientlib is loaded through the site.models category
 (() => {
-  function createElement(tagName, className, text) {
-    const element = document.createElement(tagName);
+  function createElement(tag, className) {
+    const element = document.createElement(tag);
     element.className = className;
-    if (text) element.textContent = text;
     return element;
   }
 
-  function createSkeletonCard() {
-    const card = createElement('li', 'models-card models-card-skeleton');
+  function createCardSkeleton() {
+    const card = createElement('li', 'model-card model-card-skeleton');
     card.setAttribute('aria-hidden', 'true');
 
-    card.append(
-      createElement('div', 'models-card-media'),
-      createElement('div', 'models-card-line models-card-line-title'),
-      createElement('div', 'models-card-line'),
-      createElement('div', 'models-card-line models-card-line-short'),
-    );
+    const image = createElement('div', 'model-card-image skeleton-shimmer');
+    const content = createElement('div', 'model-card-content');
+
+    const title = createElement('div', 'skeleton-line skeleton-line-title skeleton-shimmer');
+    const meta = createElement('div', 'skeleton-line skeleton-line-meta skeleton-shimmer');
+    const action = createElement('div', 'skeleton-line skeleton-line-action skeleton-shimmer');
+
+    content.append(title, meta, action);
+    card.append(image, content);
 
     return card;
   }
 
   function renderModelCard(model) {
-    const card = createElement('li', 'models-card');
-    const media = createElement('div', 'models-card-media');
+    const card = createElement('li', 'model-card');
 
-    if (model.image) {
-      const image = document.createElement('img');
-      image.src = model.image;
-      image.alt = model.imageAlt || '';
-      image.loading = 'lazy';
-      media.append(image);
-    }
+    const image = document.createElement('img');
+    image.className = 'model-card-image';
+    image.src = model.image;
+    image.alt = model.title;
+    image.width = 640;
+    image.height = 360;
 
-    card.append(
-      media,
-      createElement('h3', 'models-card-title', model.name),
-      createElement('p', 'models-card-description', model.description),
-    );
+    const content = createElement('div', 'model-card-content');
+    const title = document.createElement('h3');
+    title.className = 'model-card-title';
+    title.textContent = model.title;
+
+    const meta = document.createElement('p');
+    meta.className = 'model-card-meta';
+    meta.textContent = model.category;
+
+    content.append(title, meta);
+    card.append(image, content);
 
     return card;
   }
 
-  async function decorateModels(root) {
-    const endpoint = root.dataset.modelsEndpoint;
-    const list = createElement('ul', 'models-list models-list-skeleton');
-    list.setAttribute('aria-busy', 'true');
+  async function loadModels(block) {
+    const placeholderCount = Math.max(block.children.length, 1);
+    const grid = document.createElement('ul');
 
-    Array.from({ length: 6 }, createSkeletonCard).forEach((card) => list.append(card));
-    root.replaceChildren(list);
+    grid.className = 'models-grid';
+    grid.setAttribute('aria-busy', 'true');
 
+    for (let index = 0; index < placeholderCount; index += 1) {
+      grid.append(createCardSkeleton());
+    }
+
+    block.replaceChildren(grid);
+
+    const endpoint = block.dataset.modelsEndpoint || '/models.json';
     const response = await fetch(endpoint);
     if (!response.ok) throw new Error(`Unable to load models: ${response.status}`);
 
-    const { data: models } = await response.json();
-
-    list.classList.remove('models-list-skeleton');
-    list.removeAttribute('aria-busy');
-    list.replaceChildren(...models.map(renderModelCard));
+    const models = await response.json();
+    grid.replaceChildren(...models.map(renderModelCard));
+    grid.removeAttribute('aria-busy');
   }
 
-  document.querySelectorAll('.models[data-models-endpoint]').forEach((root) => {
-    decorateModels(root);
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.models').forEach((block) => {
+      loadModels(block).catch((error) => {
+        block.textContent = error.message;
+      });
+    });
   });
 })();
 ```
 
-```css
-/* EDS: blocks/models/models.css
-   CS: ui.apps/src/main/content/jcr_root/apps/example/clientlibs/models/models.css */
-.models-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(var(--models-card-min-inline-size), 1fr));
-  gap: var(--models-grid-gap);
-}
-
-.models-card {
-  display: grid;
-  align-content: start;
-  min-block-size: var(--models-card-min-block-size);
-  padding: var(--models-card-padding);
-}
-
-.models-card-media {
-  aspect-ratio: var(--models-card-media-aspect-ratio);
-  overflow: hidden;
-  background: #e7e7e7;
-}
-
-.models-card-media img {
-  inline-size: 100%;
-  block-size: 100%;
-  object-fit: cover;
-}
-
-.models-card-title,
-.models-card-description,
-.models-card-line {
-  margin-block: var(--models-card-spacing) 0;
-}
-
-.models-card-title {
-  min-block-size: var(--models-title-min-block-size);
-}
-
-.models-card-description {
-  min-block-size: var(--models-description-min-block-size);
-}
-
-.models-card-line {
-  block-size: var(--models-line-block-size);
-  border-radius: var(--models-line-radius);
-  background: #e7e7e7;
-}
-
-.models-card-line-title {
-  inline-size: 70%;
-  block-size: var(--models-title-min-block-size);
-}
-
-.models-card-line-short {
-  inline-size: 45%;
-}
-
-.models-list-skeleton .models-card-media,
-.models-list-skeleton .models-card-line {
-  background-image: linear-gradient(90deg, #e7e7e7 25%, #f3f3f3 50%, #e7e7e7 75%);
-  background-size: 200% 100%;
-  animation: models-skeleton-shimmer 1.2s linear infinite;
-}
-
-@keyframes models-skeleton-shimmer {
-  to { background-position: -200% 0; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .models-list-skeleton .models-card-media,
-  .models-list-skeleton .models-card-line {
-    animation: none;
-  }
-}
-```
-
-Choose placeholder dimensions and column behavior based on the loaded component at each breakpoint.
-If the loaded state adds substantially more height, different columns, or controls that are not
-represented while loading, layout shifts can still occur.
-
-### Spinner-only fallbacks for variable-size async regions
-
-```js
-// EDS: blocks/models/models.js
-// The initial block has only spinner dimensions; loaded content may have different dimensions.
-export default async function decorate(block) {
-  block.innerHTML = '<div class="loading-spinner">Loading models…</div>';
-
-  const response = await fetch('/models.json');
-  const { data: models } = await response.json();
-
-  block.innerHTML = `
-    <ul class="models-list">
-      ${models.map((model) => `<li class="models-card">${model.name}</li>`).join('')}
-    </ul>
-  `;
-}
-```
-
 ```html
-<!-- CS: ui.apps/src/main/content/jcr_root/apps/example/components/models/models.html -->
-<sly
-  data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html"
-  data-sly-call="${clientlib.css @ categories='example.models'}"></sly>
+<!-- CS: apps/example/components/models/models.html -->
+<sly data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html" />
+<sly data-sly-call="${clientlib.css @ categories='site.models'}" />
 
-<div
-  class="models"
-  data-models-endpoint="${properties.modelsEndpoint @ context='uri'}">
+<div class="models" data-models-endpoint="${properties.modelsEndpoint @ context='uri'}">
+  <div></div>
+  <div></div>
+  <div></div>
 </div>
 
-<sly data-sly-call="${clientlib.js @ categories='example.models'}"></sly>
+<sly data-sly-call="${clientlib.js @ categories='site.models'}" />
 ```
 
 ```xml
-<!-- CS: ui.apps/src/main/content/jcr_root/apps/example/clientlibs/models/.content.xml -->
+<!-- CS: apps/example/clientlibs/models/.content.xml -->
 <?xml version="1.0" encoding="UTF-8"?>
 <jcr:root
     xmlns:jcr="http://www.jcp.org/jcr/1.0"
     xmlns:nt="http://www.jcp.org/jcr/nt/1.0"
     jcr:primaryType="cq:ClientLibraryFolder"
-    categories="[example.models]"
+    categories="[site.models]"
     allowProxy="{Boolean}true"/>
 ```
 
-```js
-// CS: ui.apps/src/main/content/jcr_root/apps/example/clientlibs/models/models.js
-// The initial component has only spinner dimensions; loaded content may have different dimensions.
-(() => {
-  async function decorateModels(root) {
-    const spinner = document.createElement('div');
-    spinner.className = 'loading-spinner';
-    spinner.textContent = 'Loading models…';
-    root.replaceChildren(spinner);
+```text
+# CS: apps/example/clientlibs/models/js.txt
+models.js
 
-    const response = await fetch(root.dataset.modelsEndpoint);
-    const { data: models } = await response.json();
-
-    const list = document.createElement('ul');
-    list.className = 'models-list';
-
-    models.forEach((model) => {
-      const card = document.createElement('li');
-      card.className = 'models-card';
-      card.textContent = model.name;
-      list.append(card);
-    });
-
-    root.replaceChildren(list);
-  }
-
-  document.querySelectorAll('.models[data-models-endpoint]').forEach((root) => {
-    decorateModels(root);
-  });
-})();
+# CS: apps/example/clientlibs/models/css.txt
+models.css
 ```
 
-**Why this is bad:** A spinner or small loading message may not reserve enough space for a loaded
-form, product grid, or card list. Replacing it can shift surrounding content vertically. If the
-loading state is centered but the loaded interface is wider, the block can also appear to move
-horizontally. Use a placeholder that reserves suitable space, such as a skeleton, reserved height,
-or loading message sized for the eventual region.
+```css
+/* EDS: blocks/models/models.css */
+/* CS: clientlibs/site/models/models.css */
+/* Loaded cards and skeletons share the same geometry. */
+.models-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: 1.5rem;
+}
+
+.model-card {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+}
+
+.model-card-image {
+  aspect-ratio: 16 / 9;
+  inline-size: 100%;
+  object-fit: cover;
+}
+
+.model-card-content {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.model-card-title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.skeleton-line {
+  block-size: 1rem;
+  border-radius: 0.25rem;
+}
+
+.skeleton-line-title {
+  inline-size: 80%;
+  block-size: 2.5rem;
+}
+
+.skeleton-line-meta {
+  inline-size: 55%;
+}
+
+.skeleton-line-action {
+  inline-size: 40%;
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(90deg, #e8e8e8 25%, #f3f3f3 37%, #e8e8e8 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.2s linear infinite;
+}
+
+@keyframes skeleton-shimmer {
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-shimmer {
+    animation: none;
+  }
+}
+```
+
+The shimmer is optional visual feedback. Reserving space with dimensions that closely match the loaded component can reduce layout shifts; match the loaded component’s image ratio, text-row limit, padding, and breakpoint-specific grid rules.
 
 > **Source PRs** — **approach:** redpanda-data/console#2043, vtex-sites/base.store#317, kwonhygge/react-todo-app#2, RedHat-UX/red-hat-design-system#2043, guardian/dotcom-rendering#8570 · **anti-pattern:** loculus-project/loculus#3710, aemsites/hubblehomes-com#36, aemsites/stericycle-shared#445, atlassian/landkid#169

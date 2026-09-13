@@ -1,12 +1,17 @@
-applicable_flavors for the playbook this content is being added to: ['cs', 'ams']
+### Nginx: Configure gzip MIME types for legacy fonts
 
-### Configure gzip compression level
+The Nginx configuration enables gzip and includes legacy font MIME types in `gzip_types`.
 
 ```nginx
-gzip on;
-gzip_comp_level 9;
+http {
+  gzip on;
+  gzip_comp_level 9;
+  gzip_vary on;
+  gzip_types text/plain text/css application/json application/x-javascript \
+             application/javascript text/xml application/xml application/rss+xml \
+             text/javascript image/svg+xml application/vnd.ms-fontobject \
+             application/x-font-ttf font/opentype;
+}
 ```
-
-The evidence includes an Nginx reverse-proxy configuration with gzip enabled at compression level 9.
 
 > **Source PRs** — **approach:** next-step/infra-subway-k8s#16

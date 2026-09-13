@@ -1,32 +1,37 @@
-applicable_flavors for the playbook this content is being added to: ['eds', 'cs', 'ams']
+### Additional optimization: Subset web fonts to the character ranges the site serves
 
-### Fix 4: Serve local fonts with `font-display: swap`
-
-Serve fonts from local static assets and use `font-display: swap`.
+When a font family contains glyphs for scripts the site does not use, serve a subset rather than the full font file. This can reduce font transfer size.
 
 ```css
+/* Bad: ships a full multi-script font when the site serves Latin-only content */
 @font-face {
-  font-family: 'Inter';
+  font-family: 'Brand';
+  src: url('./fonts/brand-full.woff2') format('woff2');
+  font-weight: 400;
   font-style: normal;
-  font-weight: 100 900;
   font-display: swap;
-  src: local('Inter'), url('/inter.woff2') format('woff2');
+}
+```
+
+**Why this is bad:** The site may download font data for characters it does not render.
+
+```css
+/* Good: serve a Latin subset when it covers the site's content */
+@font-face {
+  font-family: 'Brand';
+  src: url('./fonts/brand-latin.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
 }
 
 body {
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: 'Brand', Arial, system-ui, sans-serif;
 }
 ```
 
-Preload the locally served font when appropriate:
+**Precondition:** The subset covers the content the site serves.
 
-```html
-<link rel="stylesheet" href="/fonts.css" />
-<link rel="preload" crossorigin href="/inter.woff2" as="font" />
-```
-
-**Why:** the evidence shows replacing externally loaded Google Fonts with a local font stylesheet and `font-display: swap`. Another source PR changed `font-display: block` to `swap` across font-face declarations; its audit described `block` as hiding text while the custom font downloads.
-
-Where supported by the font files and site content, consider importing only the character sets needed by the site.
+**Do not apply when:** Pages require glyphs that are not included in the subset. Use font files that provide the required glyph coverage.
 
 > **Source PRs** — **approach:** mumendiraneyya/clinic_website#23, UMAprotocol/website#128, gnolang/www.gno.land#9, MariaBraganca/ban-berlinarchnet#250, boostcampwm-2021/WEB23-HyupUp#165 · **anti-pattern:** lifeisbeautifu1/modern-react-app#61

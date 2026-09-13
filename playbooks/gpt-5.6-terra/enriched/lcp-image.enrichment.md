@@ -1,29 +1,47 @@
-applicable_flavors for the playbook this content is being added to: ['eds', 'cs', 'ams']
+### Scope LCP priority in reusable image components
 
-### Opt-in LCP mode for reusable image components
-
-When a reusable image component normally lazy-loads images, expose an explicit eager or above-the-fold variant. Apply it to the image that is rendered above the fold or is identified as the LCP image; keep the component default lazy for other images.
+Do not make every instance of a shared image component eager. Mark only an above-the-fold LCP candidate, usually the page hero.
 
 ```html
-<!-- Good: output for an above-the-fold or LCP image -->
-<img src="hero.jpg"
-     alt="Hero"
-     fetchpriority="high"
-     loading="eager">
-```
-
-Configure the variant in the page template or component instance that renders the relevant image. The evidence shows reusable profile-image components retaining lazy loading by default while allowing specific instances to load eagerly.
-
-### Making every shared-component image eager and high priority
-
-```html
-<!-- Bad -->
+<!-- Bad: every shared image is treated as critical -->
 <img src="card-image.jpg"
      alt="Card image"
-     fetchpriority="high"
-     loading="eager">
+     loading="eager"
+     fetchpriority="high">
 ```
 
-**Why this is bad:** The evidence supports eager loading for above-the-fold images while retaining lazy loading as the default for reusable image components. Applying eager loading and high priority to every shared-component image does not preserve that distinction.
+```html
+<!-- Good: only an above-the-fold hero image receives LCP priority -->
+<img src="hero.jpg"
+     alt="Hero"
+     width="1200"
+     height="800"
+     loading="eager"
+     fetchpriority="high">
+```
+
+For shared image components, use an explicit property on the single hero image resource.
+
+```html
+<!-- Good: shared image component HTL -->
+<sly data-sly-test="${properties.lcpImage}">
+  <img src="${image.src @ context='uri'}"
+       alt="${image.alt}"
+       width="${image.width}"
+       height="${image.height}"
+       loading="eager"
+       fetchpriority="high">
+</sly>
+
+<sly data-sly-test="${!properties.lcpImage}">
+  <img src="${image.src @ context='uri'}"
+       alt="${image.alt}"
+       width="${image.width}"
+       height="${image.height}"
+       loading="lazy">
+</sly>
+```
+
+Set `lcpImage` for the one above-the-fold image that is the LCP candidate. Keep other instances of the reusable component on their normal loading behavior.
 
 > **Source PRs** — **approach:** codeit-bootcamp-frontend/Weekly-Mission#104, dailydotdev/apps#2470, eCOO-FURG/apps#167, woowacourse/perf-basecamp#117, woowacourse/perf-basecamp#176 · **anti-pattern:** oreoorbitz/Dawn-employee-modifcations#2

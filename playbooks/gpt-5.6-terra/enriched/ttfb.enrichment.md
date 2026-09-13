@@ -1,38 +1,60 @@
-applicable_flavors for the playbook this content is being added to: ['cs', 'ams']
+### Separate personalized state from cacheable page HTML (CS/AMS)
 
-### Split optional client libraries from the site-wide bundle (CS/AMS)
-
-Split optional dependencies out of the site-wide bundle to reduce main-bundle size.
-
-```xml
-<!-- Bad — apps/site/clientlibs/clientlib-base/.content.xml -->
-<jcr:root
-    xmlns:jcr="http://www.jcp.org/jcr/1.0"
-    jcr:primaryType="cq:ClientLibraryFolder"
-    categories="[site.base]"
-    embed="[site.feature.chart]"
-    allowProxy="{Boolean}true"/>
-```
-
-**Why this is bad:** The chart dependency is embedded in `site.base`, so it is included wherever `site.base` is loaded. Including optional dependencies in the main bundle can increase main-bundle size.
-
-```xml
-<!-- Good — apps/site/clientlibs/clientlib-chart/.content.xml -->
-<jcr:root
-    xmlns:jcr="http://www.jcp.org/jcr/1.0"
-    jcr:primaryType="cq:ClientLibraryFolder"
-    categories="[site.feature.chart]"
-    allowProxy="{Boolean}true"/>
-```
+Do not render session- or user-specific data into otherwise public page HTML. A shared cache must serve the same representation to every anonymous visitor.
 
 ```html
-<!-- Good — apps/site/components/chart/chart.html -->
-<sly data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html"
-     data-sly-call="${clientlib.js @ categories='site.feature.chart'}"></sly>
+<!-- Bad — apps/site/components/page/page.html -->
+<sly data-sly-use.profile="com.site.core.models.ProfileModel" />
 
-<div class="cmp-chart" data-chart-config="${model.config}"></div>
+<div class="site-page">
+  <p>Welcome, ${profile.displayName}</p>
+  <sly data-sly-resource="${'content' @ resourceType='site/components/content/container'}" />
+</div>
 ```
 
-Load the feature category from the component or template that requires it rather than embedding `site.feature.chart` in the global `site.base` category.
+**Why this is bad:** The page response varies by authenticated user. Caching it can expose one visitor's name or account state to another visitor.
+
+A client-side approach can render a shared page shell and load only the required authenticated state after the cacheable HTML is delivered.
+
+```html
+<!-- Good — apps/site/components/page/page.html -->
+<sly data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html" />
+
+<div class="site-page" data-profile-endpoint="/bin/site/profile">
+  <sly data-sly-resource="${'content' @ resourceType='site/components/content/container'}" />
+</div>
+
+<sly data-sly-call="${clientlib.js @ categories='site.public-page'}" />
+```
+
+```javascript
+// Good — apps/site/clientlibs/public-page/profile.js
+document.addEventListener('DOMContentLoaded', async () => {
+  const page = document.querySelector('.site-page');
+  const endpoint = page?.dataset.profileEndpoint;
+
+  if (!endpoint) {
+    return;
+  }
+
+  const response = await fetch(endpoint, {
+    credentials: 'same-origin',
+    headers: { Accept: 'application/json' },
+  });
+
+  if (!response.ok) {
+    return;
+  }
+
+  const profile = await response.json();
+  const greeting = document.querySelector('[data-profile-greeting]');
+
+  if (greeting && profile.displayName) {
+    greeting.textContent = `Welcome, ${profile.displayName}`;
+  }
+});
+```
+
+Keep client-sensitive pages such as account and checkout out of shared caching. Do not use this pattern in a way that shares protected user data through a cacheable page shell.
 
 > **Source PRs** — **approach:** ls1intum/Artemis#5322, metabase/shoppy#71, nautobot/nautobot#7165, next-step/infra-subway-monitoring#595, shopware/frontends#309
