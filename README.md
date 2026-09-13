@@ -73,7 +73,15 @@ actually alike); this step exists specifically to catch that, and it does
 — see [Results](#results). Surviving clusters get a directional-consistency
 check, then an LLM labels `issue_type`, `risk_tier`, `applicable_flavors`,
 and — a hard gate, not a hint — `cwv_relevant`, using real evidence rather
-than a handful of short phrases.
+than a handful of short phrases. Labeling runs per-cluster in isolation, so
+two independently-formed clusters can land on the same or near-identical
+technique (embedding distance separates PRs by surface details — which
+library, which framework — not by the underlying principle a person would
+recognize as the same fix). A final **dedup pass** reads every surviving
+cluster's label together in one call, groups genuine duplicates, and keeps
+only the strongest (most source PRs) from each group rather than merging —
+merging risks combining PRs whose diffs differed in exactly the ways that
+made them cluster apart to begin with.
 
 ### 6 — Generate
 Draft → critic → **grounding check** → **AEM-fidelity check**. Evidence
@@ -90,23 +98,39 @@ example that isn't genuinely native to the flavor(s) it's claimed for
 
 ## Results
 
-Full run over the 5-year backfilled source corpus (2021–2026), judge model
-`gpt-5.4-mini` (`playbooks/gpt-5.4-mini/`, `data/processed/gpt-5.4-mini/`).
-Numbers below are specific to that run — see `playbooks/<run-name>/` for
-any other judge-model run's own output and its own count.
+Full runs over the 5-year backfilled source corpus (2021–2026), same
+14,965 source records, two judge models — `gpt-5.4-mini`
+(`playbooks/gpt-5.4-mini/`) and `gpt-5.6-terra`
+(`playbooks/gpt-5.6-terra/`). `--run-name` namespaces every stage's
+output under `data/processed/<run-name>/` and `playbooks/<run-name>/`, so
+a second model's run never clobbers the first's — see
+[Usage](#usage) for the exact commands.
 
-| Stage | Outcome |
-|---|---:|
-| Source records | 14,965 |
-| Enriched with real title/body/comments | 14,919 (99.7%) |
-| CWV-motivated (survived stage 3's relevance gate) | 4,163 (27.8%) |
-| Routed to an existing playbook | 1,861 |
-| Routed as novel | 2,302 |
-| Raw HDBSCAN clusters | 75 |
-| Confirmed coherent (survived stage 5's verification) | 20 |
-| Final novel techniques (passed consistency + relevance) | 9 |
-| Existing playbooks enriched with new evidence | 17 |
-| **Generated playbook files** | **26** |
+| Stage | `gpt-5.4-mini` | `gpt-5.6-terra` |
+|---|---:|---:|
+| Source records | 14,965 | 14,965 |
+| Enriched with real title/body/comments | 14,919 (99.7%) | 14,919 (99.7%) |
+| CWV-motivated (survived stage 3's relevance gate) | 4,535 (30.3%) | 5,144 (34.4%) |
+| Routed to an existing playbook | 1,926 | 941 |
+| Routed as novel | 2,611 | 4,202 |
+| Raw HDBSCAN clusters | 88 | 128 |
+| Confirmed coherent (survived stage 5's verification) | 21 | 26 |
+| Passed directional consistency | 19 | 23 |
+| Dropped as duplicate of a sibling cluster | 1 | 5 |
+| **Final novel techniques** | **15** | **17** |
+| Existing playbooks enriched with new evidence | 16 | 17 |
+| **Generated playbook files** | **31** | **34** |
+
+The two models disagree in real, measurable ways — not just noise. Both
+ran through the identical pipeline (same relevance gate, same coherence/
+dedup verification), so the gap is in the models' own judgment:
+`gpt-5.6-terra` is both more permissive at the relevance gate *and* far
+less likely to match a PR against an existing curated playbook (941 vs.
+1,926) — that combination pushes 4,202 PRs into novel clustering for
+`gpt-5.6-terra` against 2,611 for `gpt-5.4-mini`, which is why terra's
+raw HDBSCAN cluster count (128) is so much higher than gpt-5.4-mini's
+(88). The dedup pass had real, unequal work to do in each: 5 dropped
+duplicates for `gpt-5.6-terra` against 1 for `gpt-5.4-mini`.
 
 ## Experiment specifications
 
@@ -194,18 +218,20 @@ cwv-playbook-miner refetch-truncated
 # enrichments (and their resume caches) under data/processed/<run-name>/, so a
 # second run under a different judge model never clobbers an earlier one's
 # artifacts. Source records (perf_*.jsonl) are always shared/unnamespaced.
-cwv-playbook-miner extract --run-name gpt-5.4-mini --backend openai-compatible --model gpt-5.4-mini
+# --workers parallelizes each stage's LLM batch calls (default 1 -- route/
+# cluster/generate were sequential-only before; extract always had it).
+cwv-playbook-miner extract --run-name gpt-5.4-mini --backend openai-compatible --model gpt-5.4-mini --workers 8
 cwv-playbook-miner extract-playbooks --run-name gpt-5.4-mini --backend openai-compatible --model gpt-5.4-mini
-cwv-playbook-miner route --run-name gpt-5.4-mini --backend openai-compatible --model gpt-5.4-mini \
+cwv-playbook-miner route --run-name gpt-5.4-mini --backend openai-compatible --model gpt-5.4-mini --workers 8 \
   --embed-provider openai-compatible --embed-model text-embedding-3-small
-cwv-playbook-miner cluster --run-name gpt-5.4-mini --backend openai-compatible --model gpt-5.4-mini \
+cwv-playbook-miner cluster --run-name gpt-5.4-mini --backend openai-compatible --model gpt-5.4-mini --workers 8 \
   --embed-provider openai-compatible --embed-model text-embedding-3-small
 cwv-playbook-miner enrich-extract --run-name gpt-5.4-mini
-cwv-playbook-miner generate --run-name gpt-5.4-mini --output-dir playbooks/gpt-5.4-mini \
+cwv-playbook-miner generate --run-name gpt-5.4-mini --output-dir playbooks/gpt-5.4-mini --workers 8 \
   --backend openai-compatible --model gpt-5.4-mini
 
 # Or chain everything
-cwv-playbook-miner playbooks --run-name gpt-5.4-mini --output-dir playbooks/gpt-5.4-mini \
+cwv-playbook-miner playbooks --run-name gpt-5.4-mini --output-dir playbooks/gpt-5.4-mini --workers 8 \
   --backend openai-compatible --model gpt-5.4-mini \
   --embed-provider openai-compatible --embed-model text-embedding-3-small
 ```
