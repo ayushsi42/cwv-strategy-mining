@@ -181,55 +181,83 @@ def _chunk(groups: dict[int, list], size: int) -> list[dict[int, list]]:
     return [dict(items[s:s + size]) for s in range(0, len(items), size)]
 
 
+def _run_cluster_batches(batches: list[dict], call_fn, label: str, workers: int) -> list:
+    """Runs call_fn(batch, bi) -> result over batches, optionally in
+    parallel (ThreadPoolExecutor) -- shared by coherence-check and
+    labeling, whose only difference is call_fn and how the result gets
+    merged into the caller's `out` dict. Only the main thread ever touches
+    a shared dict; workers just return their batch's result."""
+    if workers <= 1:
+        return [call_fn(batch, bi) for bi, batch in enumerate(batches, 1)]
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    results = [None] * len(batches)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(call_fn, batch, bi): bi - 1 for bi, batch in enumerate(batches, 1)}
+        completed = 0
+        for future in as_completed(futures):
+            results[futures[future]] = future.result()
+            completed += 1
+            print(f"    {label} {completed}/{len(batches)} batches")
+    return results
+
+
 def _verify_coherence(
     groups: dict[int, list[tuple[PRRecord, TechniqueExtraction]]],
-    backend: str, model: str | None, timeout: int,
+    backend: str, model: str | None, timeout: int, workers: int = 1,
 ) -> dict[int, bool]:
     import random
-    out: dict[int, bool] = {}
     batches = _chunk(groups, CLUSTER_CALL_BATCH_SIZE)
-    for bi, batch in enumerate(batches, 1):
+
+    def _run(batch, bi):
         payload = []
         for cid, items in batch.items():
             sample = random.sample(items, min(COHERENCE_SAMPLE_SIZE, len(items)))
             evidence = "\n\n====\n\n".join(_evidence_block(pr, ext) for pr, ext in sample)
             payload.append({"cluster_id": cid, "member_count": len(items), "evidence": evidence})
-
         user = json.dumps({"clusters": payload}, ensure_ascii=False)
+        verdicts: dict[int, bool] = {}
         try:
             result = complete_json(COHERENCE_SYSTEM_PROMPT, user, backend=backend, model=model, timeout=timeout)
             for v in result.get("verdicts", []):
-                out[v["cluster_id"]] = bool(v.get("coherent"))
+                verdicts[v["cluster_id"]] = bool(v.get("coherent"))
         except LLMError as exc:
             print(f"    coherence check batch {bi}/{len(batches)} LLM error: {exc} -- rejecting this batch")
         for cid in batch:
-            out.setdefault(cid, False)  # missing verdict -> not confirmed, don't guess
-        print(f"    coherence-checked {bi}/{len(batches)} batches")
+            verdicts.setdefault(cid, False)  # missing verdict -> not confirmed, don't guess
+        return verdicts
+
+    out: dict[int, bool] = {}
+    for verdicts in _run_cluster_batches(batches, _run, "coherence-checked", workers):
+        out.update(verdicts)
     return out
 
 
 def _label_clusters(
     groups: dict[int, list[tuple[PRRecord, TechniqueExtraction]]],
-    backend: str, model: str | None, timeout: int,
+    backend: str, model: str | None, timeout: int, workers: int = 1,
 ) -> dict[int, dict]:
     import random
-    out: dict[int, dict] = {}
     batches = _chunk(groups, CLUSTER_CALL_BATCH_SIZE)
-    for bi, batch in enumerate(batches, 1):
+
+    def _run(batch, bi):
         payload = []
         for cid, items in batch.items():
             sample = random.sample(items, min(LABEL_EVIDENCE_SIZE, len(items)))
             evidence = "\n\n====\n\n".join(_evidence_block(pr, ext) for pr, ext in sample)
             payload.append({"cluster_id": cid, "member_count": len(items), "evidence": evidence})
-
         user = json.dumps({"clusters": payload}, ensure_ascii=False)
+        labels: dict[int, dict] = {}
         try:
             result = complete_json(LABEL_SYSTEM_PROMPT, user, backend=backend, model=model, timeout=timeout)
             for c in result.get("clusters", []):
-                out[c["cluster_id"]] = c
+                labels[c["cluster_id"]] = c
         except (LLMError, KeyError, TypeError) as exc:
             print(f"    labeling batch {bi}/{len(batches)} LLM error: {exc} -- skipping this batch")
-        print(f"    labeled {bi}/{len(batches)} batches")
+        return labels
+
+    out: dict[int, dict] = {}
+    for labels in _run_cluster_batches(batches, _run, "labeled", workers):
+        out.update(labels)
     return out
 
 
@@ -301,6 +329,7 @@ def cluster_and_label(
     model: str | None = None,
     timeout: int = 180,
     min_cluster_size: int = MIN_CLUSTER_PRS,
+    workers: int = 1,
 ) -> list[NovelCluster]:
     novel_ids = [r.record_id for r in routing_records if r.route == "novel"]
     items = [(pr_by_id[rid], extraction_by_id[rid]) for rid in novel_ids
@@ -328,7 +357,7 @@ def cluster_and_label(
     }
     print(f"[cluster] {len(eligible)} clusters meet size/repo floor (of {len(groups)})")
 
-    coherence = _verify_coherence(eligible, backend, model, timeout)
+    coherence = _verify_coherence(eligible, backend, model, timeout, workers)
     coherent = {cid: g for cid, g in eligible.items() if coherence.get(cid)}
     print(f"[cluster] {len(coherent)} confirmed coherent (of {len(eligible)})")
 
@@ -339,7 +368,7 @@ def cluster_and_label(
             surviving[cid] = g
     print(f"[cluster] {len(surviving)} pass directional consistency (of {len(coherent)} coherent)")
 
-    labels_by_id = _label_clusters(surviving, backend, model, timeout)
+    labels_by_id = _label_clusters(surviving, backend, model, timeout, workers)
 
     duplicate_of = _deduplicate_clusters(surviving, labels_by_id, backend, model, timeout)
     if duplicate_of:

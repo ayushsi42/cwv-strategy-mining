@@ -387,7 +387,7 @@ def cmd_route(args: argparse.Namespace) -> None:
         records, extraction_by_id, playbook_facts, Path(args.handoff_dir),
         embed_provider=args.embed_provider, embed_model=args.embed_model, embed_base_url=args.embed_base_url,
         backend=backend, model=args.model, timeout=args.timeout,
-        cache_dir=run_dir / ".route_cache",
+        cache_dir=run_dir / ".route_cache", workers=args.workers,
     )
     out = run_dir / "routing.jsonl"
     write_jsonl(routes, out)
@@ -419,6 +419,7 @@ def cmd_cluster(args: argparse.Namespace) -> None:
         routing_records, pr_by_id, extraction_by_id,
         embed_provider=args.embed_provider, embed_model=args.embed_model, embed_base_url=args.embed_base_url,
         backend=backend, model=args.model, timeout=args.timeout, min_cluster_size=args.min_cluster_size,
+        workers=args.workers,
     )
     out = run_dir / "novel_clusters.jsonl"
     write_jsonl(clusters, out)
@@ -460,26 +461,42 @@ def cmd_generate(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     pr_by_id = {r.id: r for r in _load_all_pr_records()}
 
+    gen_workers = getattr(args, "workers", 1)
+
     run_dir = _run_dir(getattr(args, "run_name", None))
     clusters_path = run_dir / "novel_clusters.jsonl"
     if clusters_path.exists():
         clusters = read_clusters(clusters_path)
-        print(f"Generating {len(clusters)} new playbooks...")
+        todo = []
         for cluster in clusters:
             out_path = output_dir / "new_playbooks" / f"{cluster.issue_type}.md"
             if out_path.exists() and not args.overwrite:
                 print(f"  [{cluster.issue_type}] already exists, skipping (--overwrite to redo)")
                 continue
-            print(f"  [{cluster.issue_type}] {len(cluster.source_pr_ids)} source PRs")
+            todo.append(cluster)
+        print(f"Generating {len(todo)} new playbooks ({gen_workers} worker(s))...")
+
+        def _gen_playbook(cluster):
             text = render_new_playbook(cluster, pr_by_id, handoff_dir, backend=backend, model=args.model, timeout=args.timeout)
             path = write_playbook(text, cluster.issue_type, output_dir)
-            print(f"    → {path}")
+            return cluster.issue_type, len(cluster.source_pr_ids), path
+
+        if gen_workers <= 1:
+            for cluster in todo:
+                issue_type, n_prs, path = _gen_playbook(cluster)
+                print(f"  [{issue_type}] {n_prs} source PRs -> {path}")
+        else:
+            with ThreadPoolExecutor(max_workers=gen_workers) as pool:
+                futures = {pool.submit(_gen_playbook, c): c for c in todo}
+                for future in as_completed(futures):
+                    issue_type, n_prs, path = future.result()
+                    print(f"  [{issue_type}] {n_prs} source PRs -> {path}")
 
     if not args.new_only:
         enrichments_path = run_dir / "enrichments.jsonl"
         if enrichments_path.exists():
             enrichments = read_enrichments(enrichments_path)
-            print(f"Generating {len(enrichments)} enrichment blocks...")
+            todo_enrich = []
             for ev in enrichments:
                 if not ev.approach_pr_ids and not ev.antipattern_pr_ids:
                     continue
@@ -487,10 +504,24 @@ def cmd_generate(args: argparse.Namespace) -> None:
                 if out_path.exists() and not args.overwrite:
                     print(f"  [{ev.playbook_id}] already exists, skipping (--overwrite to redo)")
                     continue
-                print(f"  [{ev.playbook_id}] {len(ev.approach_pr_ids)} approach + {len(ev.antipattern_pr_ids)} anti-pattern PRs")
+                todo_enrich.append(ev)
+            print(f"Generating {len(todo_enrich)} enrichment blocks ({gen_workers} worker(s))...")
+
+            def _gen_enrichment(ev):
                 text = render_enrichment(ev, pr_by_id, handoff_dir, backend=backend, model=args.model, timeout=args.timeout)
                 path = write_enrichment(text, ev.playbook_id, output_dir)
-                print(f"    → {path}")
+                return ev.playbook_id, len(ev.approach_pr_ids), len(ev.antipattern_pr_ids), path
+
+            if gen_workers <= 1:
+                for ev in todo_enrich:
+                    playbook_id, n_approach, n_anti, path = _gen_enrichment(ev)
+                    print(f"  [{playbook_id}] {n_approach} approach + {n_anti} anti-pattern PRs -> {path}")
+            else:
+                with ThreadPoolExecutor(max_workers=gen_workers) as pool:
+                    futures = {pool.submit(_gen_enrichment, ev): ev for ev in todo_enrich}
+                    for future in as_completed(futures):
+                        playbook_id, n_approach, n_anti, path = future.result()
+                        print(f"  [{playbook_id}] {n_approach} approach + {n_anti} anti-pattern PRs -> {path}")
 
     print(f"Done. Output in {output_dir}/")
 
@@ -556,6 +587,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("route", help="stage 2: retrieve-then-verify routing")
     p.add_argument("--handoff-dir", default=str(HANDOFF_DIR), help=_HANDOFF)
     p.add_argument("--run-name", default=None, help=_RUN_NAME)
+    p.add_argument("--workers", type=int, default=1, help="parallel verify-batch calls")
     _add_llm_args(p)
     _add_embed_args(p)
     p.set_defaults(func=cmd_route)
@@ -563,6 +595,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("cluster", help="stage 3+4: coherence-verified clustering + labeling")
     p.add_argument("--min-cluster-size", type=int, default=4)
     p.add_argument("--run-name", default=None, help=_RUN_NAME)
+    p.add_argument("--workers", type=int, default=1, help="parallel coherence-check/labeling batch calls")
     _add_llm_args(p)
     _add_embed_args(p)
     p.set_defaults(func=cmd_cluster)
@@ -577,6 +610,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--new-only", action="store_true")
     p.add_argument("--overwrite", action="store_true", help="regenerate even if the output file already exists")
     p.add_argument("--run-name", default=None, help=_RUN_NAME)
+    p.add_argument("--workers", type=int, default=1, help="parallel playbook/enrichment generation")
     _add_llm_args(p)
     p.set_defaults(func=cmd_generate)
 

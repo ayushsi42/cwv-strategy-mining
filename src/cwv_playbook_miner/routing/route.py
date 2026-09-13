@@ -137,6 +137,7 @@ def route_records(
     model: str | None = None,
     timeout: int = 180,
     cache_dir: Path | None = None,
+    workers: int = 1,
 ) -> list[RoutingRecord]:
     non_drop = [r for r in records if r.id in extractions and not extractions[r.id].drop]
     dropped_ids = {r.id for r in records if r.id not in extractions or extractions[r.id].drop}
@@ -187,8 +188,8 @@ def route_records(
     handoff_texts = _load_playbook_texts(handoff_dir, playbook_ids)
 
     batches = [to_verify[s:s + VERIFY_BATCH_SIZE] for s in range(0, len(to_verify), VERIFY_BATCH_SIZE)]
-    verified = 0
-    for batch in batches:
+
+    def _run_batch(batch):
         try:
             decisions = _verify_batch(batch, handoff_texts, backend, model, timeout)
         except LLMError as exc:
@@ -201,11 +202,32 @@ def route_records(
                 record_id=pr.id, route=route, playbook_id=pid, rationale=rationale,
                 top_candidates=cands, top_score=top_score,
             ))
-        results.extend(batch_results)
-        if cache_dir:
-            _append_verify_cache(batch_results, cache_dir)
-        verified += len(batch)
-        print(f"    verified {verified}/{len(to_verify)}")
+        return batch_results
+
+    verified = 0
+    if workers <= 1:
+        for batch in batches:
+            batch_results = _run_batch(batch)
+            results.extend(batch_results)
+            if cache_dir:
+                _append_verify_cache(batch_results, cache_dir)
+            verified += len(batch)
+            print(f"    verified {verified}/{len(to_verify)}")
+    else:
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        cache_lock = threading.Lock()
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_run_batch, b): b for b in batches}
+            for future in as_completed(futures):
+                batch = futures[future]
+                batch_results = future.result()
+                results.extend(batch_results)
+                if cache_dir:
+                    with cache_lock:
+                        _append_verify_cache(batch_results, cache_dir)
+                verified += len(batch)
+                print(f"    verified {verified}/{len(to_verify)}")
 
     return results
 
