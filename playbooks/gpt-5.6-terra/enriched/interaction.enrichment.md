@@ -1,76 +1,133 @@
-### Delay unit-value parsing until typing pauses
+### Defer document-wide state changes until after the drawer starts painting
 
-Use this as a reviewer-guided fix for unit inputs where parsing while typing modifies input values, particularly for invalid or formatted intermediate values such as `096`.
+When runtime attribution identifies a slow navigation-drawer interaction, check whether the interaction synchronously updates large page regions—for example, by applying `inert` to `main` and `footer`. Start the visual drawer transition first, then defer the document-wide state update until a later frame.
 
-**Anti-pattern: Parse and reformat on every keystroke**
+#### Anti-pattern: update the entire page before the drawer can paint
 
-```javascript
-// EDS: blocks/unit-input/unit-input.js
+```text
+# EDS: blocks/navigation/navigation.js
 export default function decorate(block) {
-  const input = block.querySelector('input[data-unit-input]');
+  const toggle = block.querySelector('.nav-toggle');
+  const drawer = block.querySelector('.nav-drawer');
 
-  input.addEventListener('input', ({ target }) => {
-    const parsedValue = parseUnitValue(target.value);
-    updateUnitSummary(block, parsedValue);
+  toggle.addEventListener('click', () => {
+    const isOpen = drawer.classList.toggle('is-open');
+    document.body.classList.toggle('nav-open', isOpen);
+
+    const main = document.querySelector('main');
+    const footer = document.querySelector('footer');
+
+    if (main) main.inert = isOpen;
+    if (footer) footer.inert = isOpen;
   });
 }
 
-// CS/AMS: /apps/example/clientlibs/clientlib-unit-input/js/unit-input.js
-(() => {
-  document.querySelectorAll('[data-unit-input-block]').forEach((block) => {
-    const input = block.querySelector('input[data-unit-input]');
-    if (!input) return;
+# CS / AMS: ui.apps/src/main/content/jcr_root/apps/example/clientlibs/clientlib-navigation/.content.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<jcr:root xmlns:jcr="http://www.jcp.org/jcr/1.0"
+          xmlns:sling="http://sling.apache.org/jcr/sling/1.0"
+          jcr:primaryType="cq:ClientLibraryFolder"
+          categories="[example.navigation]"/>
 
-    input.addEventListener('input', ({ target }) => {
-      const parsedValue = parseUnitValue(target.value);
-      updateUnitSummary(block, parsedValue);
-    });
-  });
-})();
-```
+# CS / AMS: page component HTL
+<sly data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html"
+     data-sly-call="${clientlib.js @ categories='example.navigation'}"/>
 
-**Why this is bad:** Parsing runs for every keystroke, including invalid or formatted intermediate values. Parsing while typing can modify the input value before the user has finished entering it.
+# CS / AMS: clientlib-navigation/js/navigation.js
+function initNavigation() {
+  const toggle = document.querySelector('.nav-toggle');
+  const drawer = document.querySelector('.nav-drawer');
 
-**Approach: Debounce parsing until typing pauses**
+  if (!toggle || !drawer) return;
 
-```javascript
-// EDS: blocks/unit-input/unit-input.js
-export default function decorate(block) {
-  const input = block.querySelector('input[data-unit-input]');
-  if (!input) return;
+  toggle.addEventListener('click', () => {
+    const isOpen = drawer.classList.toggle('is-open');
+    document.body.classList.toggle('nav-open', isOpen);
 
-  let debounceTimer;
+    const main = document.querySelector('main');
+    const footer = document.querySelector('footer');
 
-  input.addEventListener('input', ({ target }) => {
-    const rawValue = target.value;
-
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      const parsedValue = parseUnitValue(rawValue);
-      updateUnitSummary(block, parsedValue);
-    }, 500);
+    if (main) main.inert = isOpen;
+    if (footer) footer.inert = isOpen;
   });
 }
 
-// CS/AMS: /apps/example/clientlibs/clientlib-unit-input/js/unit-input.js
-(() => {
-  document.querySelectorAll('[data-unit-input-block]').forEach((block) => {
-    const input = block.querySelector('input[data-unit-input]');
-    if (!input) return;
-
-    let debounceTimer;
-
-    input.addEventListener('input', ({ target }) => {
-      const rawValue = target.value;
-
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        const parsedValue = parseUnitValue(rawValue);
-        updateUnitSummary(block, parsedValue);
-      }, 500);
-    });
-  });
-})();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initNavigation, { once: true });
+} else {
+  initNavigation();
+}
 ```
 
-> **Source PRs** — **approach:** rancher/dashboard#5670
+**Why this is bad:** Setting the majority of the page as `inert` can have a significant performance cost when trying to animate a navigation drawer. Doing it in the input handler can block the interaction and incur an INP delay.
+
+#### Approach: let the drawer paint before applying non-visual page state
+
+```text
+# EDS: blocks/navigation/navigation.js
+export default function decorate(block) {
+  const toggle = block.querySelector('.nav-toggle');
+  const drawer = block.querySelector('.nav-drawer');
+
+  toggle.addEventListener('click', () => {
+    const isOpen = drawer.classList.toggle('is-open');
+    document.body.classList.toggle('nav-open', isOpen);
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const main = document.querySelector('main');
+        const footer = document.querySelector('footer');
+        const drawerIsOpen = drawer.classList.contains('is-open');
+
+        if (main) main.inert = drawerIsOpen;
+        if (footer) footer.inert = drawerIsOpen;
+      });
+    });
+  });
+}
+
+# CS / AMS: ui.apps/src/main/content/jcr_root/apps/example/clientlibs/clientlib-navigation/.content.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<jcr:root xmlns:jcr="http://www.jcp.org/jcr/1.0"
+          xmlns:sling="http://sling.apache.org/jcr/sling/1.0"
+          jcr:primaryType="cq:ClientLibraryFolder"
+          categories="[example.navigation]"/>
+
+# CS / AMS: page component HTL
+<sly data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html"
+     data-sly-call="${clientlib.js @ categories='example.navigation'}"/>
+
+# CS / AMS: clientlib-navigation/js/navigation.js
+function initNavigation() {
+  const toggle = document.querySelector('.nav-toggle');
+  const drawer = document.querySelector('.nav-drawer');
+
+  if (!toggle || !drawer) return;
+
+  toggle.addEventListener('click', () => {
+    const isOpen = drawer.classList.toggle('is-open');
+    document.body.classList.toggle('nav-open', isOpen);
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const main = document.querySelector('main');
+        const footer = document.querySelector('footer');
+        const drawerIsOpen = drawer.classList.contains('is-open');
+
+        if (main) main.inert = drawerIsOpen;
+        if (footer) footer.inert = drawerIsOpen;
+      });
+    });
+  });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initNavigation, { once: true });
+} else {
+  initNavigation();
+}
+```
+
+Use this when profiling shows that setting large page regions as `inert` contributes to a slow drawer interaction.
+
+> **Source PRs** — **approach:** GoogleChrome/web.dev#9409, rancher/dashboard#5670

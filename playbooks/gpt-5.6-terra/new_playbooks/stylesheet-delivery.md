@@ -1,218 +1,246 @@
 ---
 issue_type: stylesheet-delivery
 applicable_flavors:
-- eds
 - cs
 - headless
 risk_tier: medium
-required_validation: []
+required_validation:
+- stylesheet_render_path_traced
+- css_bundle_inventory_built
+- stylesheet_order_preserved
+- critical_styles_available_before_first_render
+- css_side_effects_preserved
 forbidden_techniques: []
 flavor_overrides:
-  eds:
-    extra_validation: []
   cs:
-    extra_validation: []
+    extra_validation:
+    - clientlib_dependency_graph_clear
+    - publish_clientlib_minification_enabled
   headless:
-    extra_validation: []
+    extra_validation:
+    - initial_document_stylesheet_present
+    - css_asset_manifest_verified
 source_prs:
 - GoogleChromeLabs/llaminator#37
 - martincostello/costellobot#471
 - martincostello/dependabot-helper#513
+- martincostello/website#1321
+- y-scope/yscope-log-viewer#41
 - ipfs-shipyard/helia-service-worker-gateway#112
 ---
 # Stylesheet delivery
 
-> **Risk tier:** validate locally · **Applies to:** validate for the implementation · **CWV metric:** validate FCP and LCP
+> **Risk tier:** medium · **Applies to:** CS, Headless
 
 ## What this addresses
 
-The evidence shows projects configuring CSS minification and extracting CSS into generated CSS assets. It also shows that `style-loader` injects CSS at runtime, while `css-loader` loads CSS as a string.
-
-One source project reported that runtime style injection added approximately 3 KiB of uncompressed bundle overhead. Another source project fixed CSS being omitted from final assets by marking `*.css` as side effects and configuring CSS extraction.
+The evidence shows projects adopting CSS minification, extracting CSS into emitted assets, linking generated CSS files from layouts, and ensuring CSS imports are retained during production builds. It also shows that incorrectly marking CSS as side-effect-free can cause CSS to be omitted from final assets.
 
 ## When to apply / when to skip
 **Apply when:**
-- Audit evidence identifies CSS injected at runtime by JavaScript, or CSS that is not minified in the production build.
-- The stylesheet contains global or above-the-fold styles needed for the initial page render.
-- The stylesheet order and dependencies are known, and rendered-page validation can confirm no visual regressions.
-- Production CSS minification is enabled or can be enabled through the existing build and delivery configuration.
+- The audited page loads required CSS through JavaScript runtime injection rather than an initial-document stylesheet.
+- A CSS bundle is materially oversized, contains avoidable whitespace or comments, or includes selectors for unrelated page experiences.
+- The emitted stylesheet order, chunk ownership, and initial-page CSS path are statically traceable.
+- The page can retain all layout-critical CSS before first render after extraction or bundle changes.
 
-**Do not apply when:**
-- The candidate CSS is needed only after a user interaction or for a below-the-fold block, where loading it with that feature is appropriate.
-- Extracting the CSS would change an unknown cascade order, override author styles, or alter a shared stylesheet without template-level scope.
-- The delivery layer is externally managed and the project does not own the document shell or stylesheet configuration.
-- The issue is caused by a third-party stylesheet whose loading policy cannot be changed in the repository.
+**Skip when:**
+- The candidate stylesheet contains dynamic styles required before a client-rendered component can mount and its load order cannot be verified.
+- CSS is intentionally deferred because it styles only below-the-fold or interaction-only UI.
+- Splitting the stylesheet would move required above-the-fold selectors into an asynchronous chunk.
+- The CS clientlib dependency or embed graph is not fully traced.
+- The audit identifies another dominant performance issue that should be addressed first.
 
 ## Recommended approaches
 
-### EDS: keep above-the-fold styles in the initial global stylesheet
+### CS: publish a scoped, minified clientlib stylesheet from the initial HTML
 
-For an EDS implementation, consider placing site-wide and above-the-fold block styles in the initial global stylesheet rather than adding them through runtime JavaScript.
-
-```javascript
-// blocks/hero/hero.js
-// The hero's first-paint styles are in styles/styles.css;
-// this code only defers an optional interactive enhancement.
-export default function decorate(block) {
-  const video = block.querySelector('video[data-autoplay-when-visible]');
-
-  if (!video) return;
-
-  const observer = new IntersectionObserver((entries) => {
-    if (entries[0].isIntersecting) {
-      video.play().catch(() => {});
-      observer.disconnect();
-    }
-  });
-
-  observer.observe(block);
-}
-```
-
-```css
-/* styles/styles.css */
-/* Styles required for the initial hero paint are delivered as CSS. */
-.hero {
-  min-height: 32rem;
-  display: grid;
-  align-content: end;
-}
-
-.hero picture,
-.hero img {
-  display: block;
-  width: 100%;
-  height: auto;
-}
-```
-
-Validate the built output to confirm that the stylesheet is emitted, included, and ordered as intended. Reserve runtime loading for optional behavior and non-critical block styles where appropriate.
-
-### CS: include a scoped stylesheet category in the page head
-
-For a CS implementation, use the project's established template-level stylesheet inclusion mechanism for first-paint styles. Scope the stylesheet to the templates that require it and validate the generated publish output.
+Keep common and template-specific CSS in separate clientlib categories, include only the category needed by the page template, and render the stylesheet through the standard HTL clientlib template.
 
 ```xml
-<!-- ui.apps/src/main/content/jcr_root/apps/acme/clientlibs/clientlib-landing-critical/.content.xml -->
+<!-- Good: ui.apps/src/main/content/jcr_root/apps/example/clientlibs/site-base/.content.xml -->
 <jcr:root xmlns:jcr="http://www.jcp.org/jcr/1.0"
           jcr:primaryType="cq:ClientLibraryFolder"
-          categories="[acme.landing.critical]"
-          dependencies="[acme.site.base]"
+          categories="[example.site.base]"
+          allowProxy="{Boolean}true"/>
+
+<!-- ui.apps/src/main/content/jcr_root/apps/example/clientlibs/site-article/.content.xml -->
+<jcr:root xmlns:jcr="http://www.jcp.org/jcr/1.0"
+          jcr:primaryType="cq:ClientLibraryFolder"
+          categories="[example.site.article]"
+          dependencies="[example.site.base]"
           allowProxy="{Boolean}true"/>
 ```
 
 ```text
-# ui.apps/src/main/content/jcr_root/apps/acme/clientlibs/clientlib-landing-critical/css.txt
-landing-hero.css
-landing-navigation.css
+# Good: clientlibs/site-article/css.txt
+article.css
 ```
 
 ```html
-<!-- apps/acme/components/page/landing-page/landing-page.html -->
+<!-- Good: page component HTL renders CSS before body content -->
 <sly data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html"/>
-<sly data-sly-call="${clientlib.css @ categories='acme.landing.critical'}"/>
+<sly data-sly-call="${clientlib.css @ categories='example.site.article'}"/>
 ```
 
-```css
-/* clientlib-landing-critical/landing-hero.css */
-/* First-paint landing-page styles. */
-.landing-hero {
-  min-height: 32rem;
-  display: grid;
-  align-content: end;
-}
-```
+Ensure the served CSS asset is minified and verify the emitted asset after the change.
 
-Validate that the category is emitted as the expected stylesheet output and that its ordering preserves the existing cascade.
+### Headless: link the emitted CSS asset in the initial application document
 
-### Headless: expose initial shell styles as a stylesheet
-
-When the headless frontend owns the HTML document shell, consider referencing the production CSS asset in the initial document instead of constructing style tags after application startup.
+For a headless application consuming AEM Content Fragments or GraphQL data, make the build-produced stylesheet available in the initial HTML shell and keep above-the-fold rules in that initial asset.
 
 ```html
-<!-- Frontend document shell -->
+<!-- Good: application document served before AEM content is hydrated -->
 <head>
-  <link rel="stylesheet" href="/assets/site.min.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/assets/site.4a91c2.css">
 </head>
 <body>
-  <main id="app" data-aem-content-path="/content/acme/us/en/home"></main>
+  <main id="app">
+    <article class="article-shell">
+      <h1>Loading article…</h1>
+    </article>
+  </main>
+  <script src="/assets/app.4a91c2.js" defer></script>
 </body>
 ```
 
 ```css
-/* /assets/site.min.css */
-/* Initial layout styles needed before AEM content is hydrated. */
-[data-aem-content-path] {
-  display: block;
-  min-height: 100vh;
+/* Good: emitted site CSS retains layout-critical shell styles */
+.article-shell {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1rem;
 }
 ```
 
-Preserve the existing cascade order when moving styles out of runtime code, and inspect the production build to confirm that CSS is emitted as an asset.
+The evidence includes projects updating layouts to reference generated CSS assets and configuring `mini-css-extract-plugin` to emit CSS files. Content-specific CSS may be split into later chunks only when it cannot affect the initial viewport or layout reservation.
+
+### Remove unused framework and component CSS from the initial bundle
+
+Move CSS for optional components into the clientlib category or application chunk that owns that component, while retaining shared tokens and layout primitives in the initial stylesheet.
+
+```xml
+<!-- Good: carousel CSS is not part of the global site category -->
+<jcr:root xmlns:jcr="http://www.jcp.org/jcr/1.0"
+          jcr:primaryType="cq:ClientLibraryFolder"
+          categories="[example.component.carousel]"
+          dependencies="[example.site.base]"
+          allowProxy="{Boolean}true"/>
+```
+
+```text
+# Good: clientlibs/component-carousel/css.txt
+carousel.css
+```
+
+```html
+<!-- Good: only templates that render the carousel include its CSS category -->
+<sly data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html"/>
+<sly data-sly-call="${clientlib.css @ categories='example.site.base'}"/>
+<sly data-sly-test="${properties.enableCarousel}">
+  <sly data-sly-call="${clientlib.css @ categories='example.component.carousel'}"/>
+</sly>
+```
+
+One source PR reported reducing a generated `bootstrap.min.css` asset from 1,021,580 bytes to 233,399 bytes while optimizing bundle configuration. Preserve dependency order so component rules continue to override shared base rules where required.
 
 ## Anti-patterns
 
-### Injecting critical CSS from JavaScript
+### Injecting required CSS after JavaScript starts
 
 ```javascript
-// Styles are added at runtime.
-const style = document.createElement('style');
-style.textContent = `
-  .landing-hero {
-    min-height: 32rem;
-    display: grid;
-    align-content: end;
-  }
-`;
-document.head.append(style);
+// Bad: required page styling is created only after JavaScript executes
+const stylesheet = document.createElement('link');
+stylesheet.rel = 'stylesheet';
+stylesheet.href = '/etc.clientlibs/example/clientlibs/site-article.css';
+document.head.appendChild(stylesheet);
 ```
 
-**Why this is bad:** The evidence shows that style-loader-based CSS injection occurs at runtime. One investigated project reported approximately 3 KiB of uncompressed bundle overhead from injection. Validate whether extraction is appropriate for the application.
+**Why this is bad:** The evidence describes `css-loader` loading CSS as a string and `style-loader` injecting it at runtime. It also reports approximately 3 KiB of uncompressed bundle overhead from that injection approach in one project.
 
-### Moving all deferred block CSS into the initial stylesheet
+### Putting every component stylesheet in the global CS clientlib
+
+```xml
+<!-- Bad: every page downloads CSS for components it cannot render -->
+<jcr:root xmlns:jcr="http://www.jcp.org/jcr/1.0"
+          jcr:primaryType="cq:ClientLibraryFolder"
+          categories="[example.site]"
+          embed="[example.site.base,
+                  example.component.carousel,
+                  example.component.accordion,
+                  example.component.search,
+                  example.component.forms,
+                  example.component.video]"/>
+```
+
+```html
+<!-- Bad: included on every template -->
+<sly data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html"/>
+<sly data-sly-call="${clientlib.css @ categories='example.site'}"/>
+```
+
+**Why this is bad:** The provided evidence supports minimizing and reducing generated CSS bundle size, but does not specifically evaluate AEM clientlib embedding behavior. Validate the emitted CSS inventory and size before and after changing clientlib composition.
+
+### Extracting CSS into an asynchronous chunk that styles the initial viewport
+
+```html
+<!-- Bad: initial HTML has no stylesheet for the visible article shell -->
+<body>
+  <main class="article-shell">
+    <h1>Article title</h1>
+  </main>
+  <script src="/assets/app.js" defer></script>
+</body>
+```
+
+```javascript
+// Bad: the initial viewport is styled only after an asynchronous feature load
+function startArticle() {
+  const stylesheet = document.createElement('link');
+  stylesheet.rel = 'stylesheet';
+  stylesheet.href = '/assets/article-styles.css';
+
+  stylesheet.addEventListener('load', () => {
+    document.documentElement.classList.add('article-ready');
+  });
+
+  document.head.appendChild(stylesheet);
+}
+
+window.setTimeout(startArticle, 0);
+```
+
+**Why this is bad:** The evidence supports extracting CSS into emitted files and linking generated CSS from application layouts, but does not provide a measured result for asynchronous CSS that styles the initial viewport. Verify the initial document’s stylesheet references and the resulting render path.
+
+### Marking CSS as side-effect-free so the build drops it
+
+```text
+# Bad: clientlibs/site-article/css.txt omits article.css from the published clientlib
+base.css
+```
 
 ```css
-/* Consider whether every optional feature needs initial-page CSS. */
-.carousel,
-.accordion,
-.product-configurator,
-.store-locator,
-.pdf-viewer,
-.search-overlay {
-  display: block;
+/* article.css exists in the clientlib folder but is never included in css.txt */
+.article-shell {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 1rem;
 }
 ```
 
-**Why this is bad:** The provided evidence does not establish the performance effect of moving all deferred feature CSS into an initial stylesheet. Evaluate stylesheet scope and validate the rendered page and production output.
-
-### Omitting CSS from webpack side-effect configuration
-
-```json
-{
-  "sideEffects": false
-}
-```
-
-**Why this is bad:** The evidence shows a webpack project where CSS was omitted from final assets because the package declared no side effects. That project corrected the configuration by marking CSS files as side effects.
-
-```json
-{
-  "sideEffects": [
-    "*.css"
-  ]
-}
-```
+**Why this is bad:** One source PR reports that CSS files were ignored during tree splitting when the package declared no side effects. That project changed `sideEffects` to include `"*.css"` and added a test verifying that the expected CSS file was present in the distribution output.
 
 ## Flavor-specific notes
 
-### EDS
-
-Validate how the EDS implementation loads global and block styles before moving CSS. Confirm that the rendered page preserves the intended cascade order.
-
 ### CS
 
-Use the project's established stylesheet and template-inclusion conventions. Validate the publish output, stylesheet ordering, and configured minification behavior.
+Trace the clientlib `dependencies`, `embed` relationships, and every HTL template that includes the affected category before splitting or removing CSS. Preserve the existing cascade order: base tokens and grid/layout CSS should remain before template and component categories.
+
+Confirm the publish-tier clientlib configuration produces minified output and verify the generated `.css` asset size after the change rather than relying only on source-file size.
 
 ### Headless
 
-Apply this playbook only when the frontend document shell is in the repository and can be changed. Confirm that the production build emits the expected CSS asset and that the document references it as intended.
+Verify that the HTML shell references the emitted, cache-busted CSS filename and that deployment publishes the matching asset before changing chunk names or extraction behavior.
+
+For client-rendered applications, verify that shell and visible-component CSS are present in the initial stylesheet when required. Verify that CSS imports remain included in production output rather than being removed by side-effect optimization.

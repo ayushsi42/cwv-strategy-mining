@@ -1,33 +1,49 @@
-### Parallelize independent lazy module imports
+### Remove an application-level preflight request
 
-When lazy-loaded modules are independent, consider loading them in parallel. The evidence identifies parallelizing lazy loading for required dependencies as a way to keep bundle size as small as possible.
+When a client performs a route or configuration preflight before requesting page data, consider returning the route or configuration decision with the page-data response. Do not use a separate application request solely to decide whether the data request can begin.
+
+> This applies to application-level “preflight” endpoints, not browser-managed CORS `OPTIONS` preflight requests.
+
+**Bad:**
 
 ```javascript
-// Sequential loading
+// The page-data request cannot start until config resolves.
 export default async function decorate(block) {
-  const mapModule = await import('./map.js');
-  const filtersModule = await import('./filters.js');
+  const slug = block.dataset.slug;
 
-  const map = mapModule.createMap(block.querySelector('.map'));
-  filtersModule.attachFilters(block.querySelector('.filters'), map);
+  const configResponse = await fetch(`/api/routes/${encodeURIComponent(slug)}`);
+  if (!configResponse.ok) throw new Error('Unable to load route configuration');
+
+  const { renderPath } = await configResponse.json();
+
+  const pageResponse = await fetch(`/api/page/${encodeURIComponent(slug)}`);
+  if (!pageResponse.ok) throw new Error('Unable to load page data');
+
+  const page = await pageResponse.json();
+  block.classList.add(`page-${renderPath}`);
+  block.append(Object.assign(document.createElement('h1'), { textContent: page.title }));
 }
 ```
 
-**Why this is bad:** The evidence flags sequential independent work as an opportunity for parallelization.
+**Why this is bad:** In the simple SSR/SSG scenario described by the evidence, a dedicated preflight followed by a data request produces two synchronous serial requests before rendering can proceed.
+
+**Good:**
 
 ```javascript
-// Parallel loading
+// One response contains both page data and the render decision.
 export default async function decorate(block) {
-  const [mapModule, filtersModule] = await Promise.all([
-    import('./map.js'),
-    import('./filters.js'),
-  ]);
+  const slug = block.dataset.slug;
+  const response = await fetch(`/api/page/${encodeURIComponent(slug)}`);
 
-  const map = mapModule.createMap(block.querySelector('.map'));
-  filtersModule.attachFilters(block.querySelector('.filters'), map);
+  if (!response.ok) throw new Error('Unable to load page data');
+
+  const { title, renderPath = 'default' } = await response.json();
+
+  block.classList.add(`page-${renderPath}`);
+  block.append(Object.assign(document.createElement('h1'), { textContent: title }));
 }
 ```
 
-Only apply this pattern when the modules are independent.
+Update the endpoint so that it preserves the rewrite, routing, or configuration semantics previously supplied by the preflight while returning the requested page data.
 
-> **Source PRs** — **approach:** scalableminds/webknossos#5993, konturio/disaster-ninja-fe#344, decentraland/js-sdk-toolchain#549, digitalfabrik/integreat-app#942, elastic/kibana#161144 · **anti-pattern:** platform-q-ai/jarga-admin#79, vorausrobotik/vdoc#128
+> **Source PRs** — **approach:** scalableminds/webknossos#5993, vercel/next.js#37490, digitalfabrik/integreat-app#942, elastic/kibana#161144, next-step/react-gift-product-detail#121 · **anti-pattern:** xmtp/xmtp-js#185, platform-q-ai/jarga-admin#79, vorausrobotik/vdoc#128, Voog/design-nuuk#69

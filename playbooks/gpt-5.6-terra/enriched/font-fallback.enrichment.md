@@ -1,37 +1,13 @@
-### Additional optimization: Subset web fonts to the character ranges the site serves
+### Fix 4: Import only the font character sets your site needs
 
-When a font family contains glyphs for scripts the site does not use, serve a subset rather than the full font file. This can reduce font transfer size.
+**Anti-pattern: Shipping a full multi-script font file when the site only needs a subset of its characters**
 
-```css
-/* Bad: ships a full multi-script font when the site serves Latin-only content */
-@font-face {
-  font-family: 'Brand';
-  src: url('./fonts/brand-full.woff2') format('woff2');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-```
+**Why this is bad:** loading character sets that are not needed can increase font bundle size.
 
-**Why this is bad:** The site may download font data for characters it does not render.
+**Approach:** Import only the character sets needed by the site. For example, a Latin-only site can use a Latin character subset rather than a font file containing additional scripts.
 
-```css
-/* Good: serve a Latin subset when it covers the site's content */
-@font-face {
-  font-family: 'Brand';
-  src: url('./fonts/brand-latin.woff2') format('woff2');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
+**Precondition:** confirm which languages and character sets the site needs before limiting font imports.
 
-body {
-  font-family: 'Brand', Arial, system-ui, sans-serif;
-}
-```
+**Why this helps:** importing only needed characters can reduce font bundle size.
 
-**Precondition:** The subset covers the content the site serves.
-
-**Do not apply when:** Pages require glyphs that are not included in the subset. Use font files that provide the required glyph coverage.
-
-> **Source PRs** — **approach:** mumendiraneyya/clinic_website#23, UMAprotocol/website#128, gnolang/www.gno.land#9, MariaBraganca/ban-berlinarchnet#250, boostcampwm-2021/WEB23-HyupUp#165 · **anti-pattern:** lifeisbeautifu1/modern-react-app#61
+> **Source PRs** — **approach:** mumendiraneyya/clinic_website#23, UMAprotocol/website#128, gnolang/www.gno.land#9, lsst-epo/rubin-obs-client#560, codeit-fe16-part4-team1/project-mogazoa-app#84 · **anti-pattern:** lifeisbeautifu1/modern-react-app#61

@@ -1,160 +1,98 @@
 ---
 issue_type: duplicate-requests
+risk_tier: medium
 applicable_flavors:
 - eds
 - cs
 - ams
 - headless
-risk_tier: medium
-required_validation: []
 forbidden_techniques: []
+required_validation: []
 source_prs:
-- adobecom/express#998
-- ITISFoundation/osparc-simcore#7487
-- bitwarden/clients#14740
-- adobe/adobe-design-website#81
+- getsentry/sentry#84763
+- getsentry/sentry#83690
+- getsentry/sentry#83884
+- rayanfer32/nexus-explorer-next#30
+- elastic/kibana#133371
 ---
 # Duplicate requests
 
-> **Risk tier:** medium · **Applies to:** EDS, Headless · **CWV metric:** LCP
-
 ## What this addresses
 
-Multiple components can request the same resource concurrently before the first response completes. Sharing an in-flight Promise can avoid duplicate network requests. In the Express PR, deduplicating requests, including `placeholders.json`, was intended to save bandwidth and was associated with a measured 0.1–0.2 second LCP improvement in local testing.
+The evidence shows migrations from promise- or legacy async-component-based data loading to React Query:
+
+- Kibana refactors Cases connector and action-license hooks to use React Query. The selector modal is wrapped in a `QueryClientProvider`.
+- Sentry replaces a single bootstrap promise for organization, projects, and teams with React Query queries. The PR describes this as a step toward client-side caching of projects.
+- Sentry converts legacy async components to query hooks while preserving loading, error, and empty-state handling.
+- A Sentry service-hooks mutation updates the matching cached query data after a successful response.
 
 ## When to apply / when to skip
 **Apply when:**
-- A network waterfall shows two or more concurrent requests for the same resource.
-- Concurrent callers can use the same response.
-- The request is safe to share for the relevant page, user, and response context.
-
-**Skip when:**
-- Callers require different responses or request behavior.
-- The duplicate requests are sequential rather than concurrent; an in-flight Promise cache will not reduce them.
+- Existing request loading is being migrated to query-based state management
+- The response can be represented by a query key and reused according to an explicit freshness policy
+- Loading, error, and empty states remain handled after the migration
+- Successful mutations update or otherwise refresh the corresponding query state
 
 ## Recommended approaches
 
-### Share only the in-flight JSON request
+### Use query hooks for shared request state
 
-Use a shared Promise for a request that is already in progress. Store the Promise before awaiting it, return it to concurrent callers, and clear it after completion so a later request can run.
+The Kibana and Sentry changes replace direct or legacy asynchronous loading patterns with React Query-based hooks. Query hooks can centralize loading and error state for consumers that share the same query client.
 
-```javascript
-// Good: scripts/shared-request.js
-const inFlightRequests = new Map();
+### Define freshness deliberately
 
-export function getSharedJson(requestKey, url, options = {}) {
-  const existingRequest = inFlightRequests.get(requestKey);
-  if (existingRequest) return existingRequest;
+Sentry’s bootstrap queries define a stale-time policy; the source comments describe stale time as determining whether a query should be refetched. Choose a freshness policy appropriate to the resource rather than relying on an unspecified default.
 
-  const request = fetch(url, options)
-    .then((response) => {
-      if (!response.ok) {
-        throw new Error(`Request failed: ${response.status} ${url}`);
+### Preserve loading, error, and empty states
+
+The Sentry service-hooks conversion explicitly renders:
+
+- `LoadingIndicator` while the query is pending
+- `LoadingError` with retry support when the query fails
+- An empty message when no service hooks are returned
+
+Retain equivalent states when converting existing request paths.
+
+### Update cached data after successful mutations
+
+The Sentry service-hooks mutation updates the cached service-hook list after a successful `PUT` response:
+
+```typescript
+setApiQueryData<ServiceHook[]>(
+  queryClient,
+  [`/projects/${organization.slug}/${projectId}/hooks/`],
+  oldHookList => {
+    return oldHookList.map(h => {
+      if (h.id === data.id) {
+        return {
+          ...h,
+          ...data,
+        };
       }
-
-      return response.json();
+      return h;
     });
-
-  inFlightRequests.set(requestKey, request);
-
-  return request.finally(() => {
-    if (inFlightRequests.get(requestKey) === request) {
-      inFlightRequests.delete(requestKey);
-    }
-  });
-}
+  }
+);
 ```
 
-An in-flight cache deduplicates overlapping requests. Clearing the entry after completion allows a later caller to make a new request.
-
-### EDS: use one shared request from block decoration
-
-Import a shared helper from project scripts and use the same request key for callers that should share a response.
-
-```javascript
-// Good: blocks/article-list/article-list.js
-import { getSharedJson } from '../../scripts/shared-request.js';
-
-export default function decorate(block) {
-  const locale = document.documentElement.lang || 'en';
-  const endpoint = `/articles/query-index.json?locale=${encodeURIComponent(locale)}`;
-  const requestKey = `articles:${locale}`;
-
-  return getSharedJson(requestKey, endpoint).then((data) => {
-    const list = document.createElement('ul');
-
-    data.data.forEach((article) => {
-      const item = document.createElement('li');
-      const link = document.createElement('a');
-
-      link.href = article.path;
-      link.textContent = article.title;
-      item.append(link);
-      list.append(item);
-    });
-
-    block.replaceChildren(list);
-  });
-}
-```
-
-If an article-list block and a filter block decorate at the same time and use this helper with the same key, they receive the same in-flight request.
+Use the successful server response when it represents the cached resource. Otherwise, refresh or invalidate the affected query state.
 
 ## Anti-patterns
 
-### Fetching the same resource independently in each caller
+### Using `staleTime: 0` without an intentional refetch policy
 
-```javascript
-// Bad: blocks/filter-group/filter-group.js
-export default async function decorate(block) {
-  const response = await fetch('/ideas/query-index.json');
-  const articles = await response.json();
-
-  block.dataset.articleCount = String(articles.data.length);
-}
-
-// Bad: blocks/ideas-list/ideas-list.js
-export default async function decorate(block) {
-  const response = await fetch('/ideas/query-index.json');
-  const articles = await response.json();
-  const list = document.createElement('ul');
-
-  articles.data.forEach((article) => {
-    const item = document.createElement('li');
-    item.textContent = article.title;
-    list.append(item);
-  });
-
-  block.replaceChildren(list);
-}
+```typescript
+useApiQuery<ServiceHook[]>(['/projects/.../hooks/'], {
+  staleTime: 0,
+});
 ```
 
-**Why this is bad:** Concurrent component decoration can produce duplicate requests for the same data. The referenced PRs use shared caches or in-flight Promises to avoid repeated requests.
+**Why this needs review:** The Sentry source defines stale time as the setting that determines whether a query should be refetched. A `staleTime: 0` configuration should therefore be intentional and compatible with the desired request behavior.
 
-### Caching a rejected Promise forever
+### Dropping state handling during a query migration
 
-```javascript
-// Bad: a transient failure makes every later caller fail without retrying
-let placeholdersRequest;
+**Why this needs review:** The Sentry conversions retain pending, error, retry, and empty-state behavior. A migration that removes those states changes the user-visible behavior even if the request itself succeeds.
 
-export function getPlaceholders() {
-  if (!placeholdersRequest) {
-    placeholdersRequest = fetch('/placeholders.json')
-      .then((response) => response.json());
-  }
+### Leaving cached query data unchanged after a successful write
 
-  return placeholdersRequest;
-}
-```
-
-**Why this is bad:** If the stored Promise rejects and is not cleared, later callers receive that same rejected Promise instead of starting another request.
-
-## Flavor-specific notes
-
-### EDS
-
-The Express PR deduplicated placeholder requests by storing a shared Promise. Public resources such as placeholders, query indexes, and shared metadata can be candidates for this pattern when concurrent callers can use the same response.
-
-### Headless
-
-Apply the pattern in a shared data-access service rather than separately in each component. The Bitwarden PR stored in-flight token-refresh and sync Promises and returned the existing Promise when another sync request was already in progress.
+**Why this needs review:** The Sentry service-hooks mutation updates cached query data after a successful response. If an edit path does not update, invalidate, or refetch the affected data, later consumers may continue to read older query state.

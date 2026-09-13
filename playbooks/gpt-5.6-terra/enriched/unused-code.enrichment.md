@@ -1,11 +1,44 @@
-### Remove confirmed-unused exports and modules
+### Remove retired feature-flag branches and orphaned imports
 
-After confirming that an export or module has no consumers, delete it instead of relying only on tree shaking. One source PR reported that tree shaking did not remove all unused code and that removing unused functions produced an approximately 3 KB net bundle decrease.
+After a feature flag is permanently retired, remove the obsolete branch, its implementation, and any imports and tests that only supported that branch.
 
 ```javascript
-// Delete an unused export or module only after confirming it has no consumers.
+// Good — blocks/logs/logs.js
+import { getMetadata } from '../../scripts/aem.js';
+
+export default async function decorate(block) {
+  if (getMetadata('logs-enabled') !== 'true') {
+    block.remove();
+    return;
+  }
+
+  const { decorateLogsTable } = await import('./logs-table.js');
+  await decorateLogsTable(block);
+}
 ```
 
-Check relevant imports and usage before removing code, then run the applicable build, type checks, and functional tests after removal.
+### Leaving retired branches in place after selecting the new default
 
-> **Source PRs** — **approach:** Jujulego/jill#1230, Automattic/wp-calypso#108174, OpenNews/srccon-site-starterkit#1, ngareleo/tvke#12, dailydotdev/apps#639 · **anti-pattern:** getsentry/sentry#83982, SolidInvoice/SolidInvoice#1551, konturio/disaster-ninja-fe#894, getsentry/sentry#83569
+```javascript
+// Bad — blocks/logs/logs.js
+import { getMetadata } from '../../scripts/aem.js';
+
+export default async function decorate(block) {
+  if (getMetadata('logs-enabled') !== 'true') {
+    block.remove();
+    return;
+  }
+
+  if (getMetadata('logs-infinite-scroll') === 'true') {
+    const { decorateInfiniteLogs } = await import('./infinite-logs.js');
+    await decorateInfiniteLogs(block);
+  } else {
+    const { decorateLogsTable } = await import('./logs-table.js');
+    await decorateLogsTable(block);
+  }
+}
+```
+
+**Why this is bad:** Keeping both paths retains code and imports that might otherwise be removed. Removing obsolete code has reduced bundle size in the cited PRs, although tree-shaking does not always eliminate unused code.
+
+> **Source PRs** — **approach:** getsentry/sentry#98296, OneSignal/OneSignal-Website-SDK#1372, Automattic/wp-calypso#108174, OpenNews/srccon-site-starterkit#1, SAP/fundamental-ngx#7407 · **anti-pattern:** getsentry/sentry#83982, SolidInvoice/SolidInvoice#1551, aarcangeli/ue-web-viewer#8, home-assistant/frontend#18793

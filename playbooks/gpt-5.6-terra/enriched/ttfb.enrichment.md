@@ -1,60 +1,21 @@
-### Separate personalized state from cacheable page HTML (CS/AMS)
+### Keep session-aware routes out of shared caches
 
-Do not render session- or user-specific data into otherwise public page HTML. A shared cache must serve the same representation to every anonymous visitor.
+Do not shared-cache pages whose rendered HTML uses session context. Keep client-sensitive pages such as checkout and account pages client-rendered, and avoid rendering session data on the server when shared edge caching is enabled.
 
-```html
-<!-- Bad — apps/site/components/page/page.html -->
-<sly data-sly-use.profile="com.site.core.models.ProfileModel" />
+**Why this is bad:** If session-aware HTML is stored in a shared cache, it can be served to another user. The `useUserContextInSSR` setting should be used carefully with edge caching to avoid sharing user data.
 
-<div class="site-page">
-  <p>Welcome, ${profile.displayName}</p>
-  <sly data-sly-resource="${'content' @ resourceType='site/components/content/container'}" />
-</div>
+Ensure that public-page responses do not include session-specific data before enabling shared caching.
+
+### Use long browser TTLs for content-hashed public DAM assets
+
+Public DAM assets whose URLs include a content hash can use a long browser cache lifetime because an updated asset receives a new URL. In the cited implementation, browsers cache public DAM files and images for one year, while proxies and CDNs cache them for one day.
+
+```http
+Cache-Control: max-age=31536000, s-maxage=86400, public
 ```
 
-**Why this is bad:** The page response varies by authenticated user. Caching it can expose one visitor's name or account state to another visitor.
+**Why this is bad:** A long cache duration can cause users to continue receiving an older asset when the URL does not change after an update.
 
-A client-side approach can render a shared page shell and load only the required authenticated state after the cacheable HTML is delivered.
+Verify that an asset URL changes when its content changes before applying a one-year browser TTL.
 
-```html
-<!-- Good — apps/site/components/page/page.html -->
-<sly data-sly-use.clientlib="/libs/granite/sightly/templates/clientlib.html" />
-
-<div class="site-page" data-profile-endpoint="/bin/site/profile">
-  <sly data-sly-resource="${'content' @ resourceType='site/components/content/container'}" />
-</div>
-
-<sly data-sly-call="${clientlib.js @ categories='site.public-page'}" />
-```
-
-```javascript
-// Good — apps/site/clientlibs/public-page/profile.js
-document.addEventListener('DOMContentLoaded', async () => {
-  const page = document.querySelector('.site-page');
-  const endpoint = page?.dataset.profileEndpoint;
-
-  if (!endpoint) {
-    return;
-  }
-
-  const response = await fetch(endpoint, {
-    credentials: 'same-origin',
-    headers: { Accept: 'application/json' },
-  });
-
-  if (!response.ok) {
-    return;
-  }
-
-  const profile = await response.json();
-  const greeting = document.querySelector('[data-profile-greeting]');
-
-  if (greeting && profile.displayName) {
-    greeting.textContent = `Welcome, ${profile.displayName}`;
-  }
-});
-```
-
-Keep client-sensitive pages such as account and checkout out of shared caching. Do not use this pattern in a way that shares protected user data through a cacheable page shell.
-
-> **Source PRs** — **approach:** ls1intum/Artemis#5322, metabase/shoppy#71, nautobot/nautobot#7165, next-step/infra-subway-monitoring#595, shopware/frontends#309
+> **Source PRs** — **approach:** shopware/frontends#309, colonial-heritage/colonial-collections#108, vivid-planet/comet#3926

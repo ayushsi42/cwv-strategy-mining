@@ -1,31 +1,25 @@
-### Don't rely on non-critical CSS for image dimensions
+### Reserving image dimensions
 
 ```html
-<!-- Bad: component.html -->
-<img class="site-header__logo"
-     src="${properties.logo @ context='uri'}"
-     alt="${properties.logoAlt}">
+<img class="post-card__image"
+     src="/content/dam/site/images/post-card.jpg"
+     alt="Post card image"
+     width="300"
+     height="300">
 ```
 
-```css
-/* clientlib-site-header/css/header.css, loaded after initial render */
-.site-header__logo {
-  width: 202px;
-  height: 58px;
-}
-```
+**Why this matters:** Specifying `width` and `height` reserves space for an image and can help prevent layout shifts.
 
-**Why this is bad:** The browser may encounter the `<img>` before its CSS is available. Providing dimensions only in CSS can mean the image’s size changes after the stylesheet loads, potentially contributing to layout shift in surrounding header content.
-
-Put `width` and `height` attributes on the emitted `<img>` element. CSS can still control responsive rendering.
+Use dimensions that are appropriate for the image and its intended layout:
 
 ```html
-<!-- Good: component.html -->
-<img class="site-header__logo"
-     src="${properties.logo @ context='uri'}"
-     width="202"
-     height="58"
-     alt="${properties.logoAlt}">
+<img class="post-card__image"
+     src="/content/dam/site/images/article-hero.jpg"
+     alt="Article hero image"
+     width="1200"
+     height="675">
 ```
 
-> **Source PRs** — **approach:** amfoss/events-portal#10, mozilla/bedrock#11994, utmgdsc/website#41, BrightonMboya/tazama#4, codeit-bootcamp-frontend/8-Sprint-Mission#265 · **anti-pattern:** nearform/bioconductor.org#47, lensterxyz/lenster#1265
+A stylesheet `aspect-ratio` rule can also be used to reserve image space.
+
+> **Source PRs** — **approach:** BrightonMboya/tazama#4, codeit-bootcamp-frontend/8-Sprint-Mission#265, metabase/shoppy#71, codeit-bootcamp-frontend/16-Sprint-Mission#75, processing/p5.js-website#358 · **anti-pattern:** lexisgasa/Blog-UI-TRP#30

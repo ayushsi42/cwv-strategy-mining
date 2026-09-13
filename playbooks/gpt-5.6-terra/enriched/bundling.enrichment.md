@@ -1,38 +1,50 @@
-### EDS: load optional block features only when authored markup requires them
+### EDS: load optional interaction features on intent
 
-Keep optional renderers—such as diagrams, syntax highlighting, or notification integrations—out of the block’s static import graph. Check for the authored feature first, then dynamically import its standalone module.
+Do not load optional interaction code during block decoration when it is not needed for the initial render. For pickers, syntax highlighting, diagrams, or advanced configuration, begin loading after the visitor signals likely intent through pointer hover.
 
 ```javascript
-// blocks/article/article.js
-export default async function decorate(block) {
-  const diagram = block.querySelector('[data-diagram="mermaid"]');
+// Bad — optional code loads for every visitor during block initialization
+import { openAdvancedPicker } from './advanced-picker.js';
 
-  if (!diagram) {
-    return;
-  }
+export default function decorate(block) {
+  const trigger = block.querySelector('button');
 
-  const { renderDiagram } = await import('./mermaid.js');
-  await renderDiagram(diagram);
+  trigger?.addEventListener('click', () => {
+    openAdvancedPicker(block);
+  });
 }
 ```
 
-This can keep the base block module smaller for pages that use the block without the optional feature. Keep the optional implementation in a separate module so that it can be loaded independently.
-
-### Static imports of conditionally used feature modules
+**Why this is bad:** `advanced-picker.js` is included in the initial code path for every page containing the block, including visitors who never use the optional feature. This increases the block's initial JavaScript cost.
 
 ```javascript
-// Bad — mermaid.js and its dependencies are statically imported whenever this block module loads
-import { renderDiagram } from './mermaid.js';
+// Good — optional code loads after likely interaction intent
+export default function decorate(block) {
+  const trigger = block.querySelector('button');
+  if (!trigger) return;
 
-export default async function decorate(block) {
-  const diagram = block.querySelector('[data-diagram="mermaid"]');
+  let featureModule;
 
-  if (diagram) {
-    await renderDiagram(diagram);
-  }
+  const loadFeature = () => {
+    featureModule ??= import('./advanced-picker.js');
+    return featureModule;
+  };
+
+  trigger.addEventListener(
+    'pointerenter',
+    () => {
+      void loadFeature();
+    },
+    { once: true },
+  );
+
+  trigger.addEventListener('click', async () => {
+    const { openAdvancedPicker } = await loadFeature();
+    openAdvancedPicker(block);
+  });
 }
 ```
 
-**Why this is bad:** The condition controls whether the renderer is called, but the module remains a static import. The evidence recommends using dynamic imports to reduce bundle size and shows Mermaid and syntax-highlighting functionality being moved into standalone components as part of a bundle-size improvement. Check for the authored feature before using `import()` to load its standalone module.
+Keep the block's initial UI and trigger lightweight and usable before the import resolves. Use intent-based loading only for optional functionality.
 
-> **Source PRs** — **approach:** ant-design/x#1402, exelearning/exelearning#1439, nader-eloshaiker/screen-geometry-app#508, woowacourse/perf-basecamp#154, woowacourse/perf-basecamp#163 · **anti-pattern:** Jujulego/palantir#241, ministryofjustice/hmpps-content-hub-ui#65, dailydotdev/apps#1426, newrelic/newrelic-browser-agent#532
+> **Source PRs** — **approach:** nader-eloshaiker/screen-geometry-app#508, ant-design/x#1402, woowacourse/perf-basecamp#163, woowacourse/perf-basecamp#154, elastic/kibana#218442 · **anti-pattern:** n8n-io/n8n#25649, getsentry/gib-potato#275, elastic/kibana#136328, shrinker03/NamasteReactBootcamp#7

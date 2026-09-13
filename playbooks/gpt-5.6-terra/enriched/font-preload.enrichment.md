@@ -1,12 +1,8 @@
-## Preload font URLs that match the `@font-face` source
-
-Preload font files from the document head when they are needed early in rendering. The evidence shows font preloads using `as="font"`, an appropriate font MIME type, and `crossorigin="anonymous"`, alongside matching `@font-face` declarations.
-
-### Anti-pattern: preload a different URL than the font-face source
+## Example: A preload URL that differs from the CSS font URL
 
 ```html
 <link rel="preload"
-      href="/fonts/brand-regular.woff2"
+      href="/etc.clientlibs/acme/clientlibs/site/resources/fonts/brand-regular.woff2"
       as="font"
       type="font/woff2"
       crossorigin="anonymous">
@@ -15,46 +11,38 @@ Preload font files from the document head when they are needed early in renderin
 ```css
 @font-face {
   font-family: "Brand";
-  src: url("/assets/brand-regular.woff2") format("woff2");
+  src: url("/etc.clientlibs/acme/clientlibs/site/resources/fonts/brand-regular-v2.woff2") format("woff2");
   font-weight: 400;
   font-style: normal;
 }
 ```
 
-**Why this is bad:** the preload URL does not match the URL in the `@font-face` declaration. Use the same font-file URL for both.
+The preload URL and the `@font-face` URL shown here differ. The evidence PRs instead derive preload URLs from the same font asset data used to generate font declarations.
 
-### Approach: declare and preload the same font files
+## Approach: Keep the preload and `@font-face` URL aligned
 
-```css
-@font-face {
-  font-family: "Brand";
-  src: url("/fonts/brand-regular.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-}
-
-@font-face {
-  font-family: "Brand";
-  src: url("/fonts/brand-semibold.woff2") format("woff2");
-  font-weight: 600;
-  font-style: normal;
-}
-```
+Define the preload and its matching `@font-face` declaration from the same global head injection point when the site permits inline styles.
 
 ```html
+<!-- /apps/acme/components/structure/page/customheaderlibs.html -->
+<sly data-sly-set.fontUrl="/etc.clientlibs/acme/clientlibs/site/resources/fonts/brand-regular.woff2"></sly>
+
 <link rel="preload"
-      href="/fonts/brand-regular.woff2"
+      href="${fontUrl @ context='uri'}"
       as="font"
       type="font/woff2"
       crossorigin="anonymous">
 
-<link rel="preload"
-      href="/fonts/brand-semibold.woff2"
-      as="font"
-      type="font/woff2"
-      crossorigin="anonymous">
+<style>
+  @font-face {
+    font-family: "Brand";
+    src: url("${fontUrl @ context='uri'}") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+  }
+</style>
 ```
 
-Keep the preload URLs aligned with the font URLs used by the emitted `@font-face` declarations.
+The evidence-backed implementation preloads font files in a head component and inlines generated `@font-face` declarations using the same font URLs.
 
-> **Source PRs** — **approach:** htmlacademy-adaptive/2280491-cat-energy-28#9, jakearchibald/svgomg#339, voorhoede/head-start#209, mongodb/snooty#1050
+> **Source PRs** — **approach:** woowacourse/perf-basecamp#142, voorhoede/head-start#209, sebastianterleira/astro-spotify-clone#1, unicorn-utterances/unicorn-utterances#1025
