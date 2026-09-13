@@ -73,6 +73,37 @@ Return strict JSON, one entry per input cluster, same order:
 {"clusters": [{"cluster_id": <int>, "cwv_relevant": true|false, "issue_type": "...",
   "description": "...", "applicable_flavors": [...], "risk_tier": "...", "aem_rationale": "..."}]}"""
 
+# Labeling above only checks issue_type against the curated set (a fixed
+# list in the prompt) -- it has zero visibility into sibling novel clusters
+# being labeled in this same run, since each cluster is labeled in its own
+# independent call. Confirmed live: this let 11 separately-formed clusters
+# all independently describe "convert CommonJS/barrel imports to ESM so
+# bundlers can tree-shake" (different clusters because their embedding text
+# named different libraries -- Lodash, an SDK, an icon package -- so
+# HDBSCAN correctly saw them as embedding-distant even though a person
+# reads them as the same fix), and 2 clusters both landed on the literal
+# name "excess-javascript-payload" with zero source-PR overlap. This is a
+# dedicated pass over every surviving cluster's label together (cheap --
+# short issue_type/description/aem_rationale strings, not full PR evidence)
+# specifically to catch that; nothing upstream of it ever compares one
+# cluster to another.
+DEDUP_SYSTEM_PROMPT = """You are deduplicating a set of already-labeled novel CWV playbook
+candidates. Each was clustered and labeled independently (by embedding similarity of its own PRs),
+so two candidates can describe the SAME underlying technique even when their issue_type names and
+example libraries differ -- e.g. one cluster keyed off a Lodash import and another off an unrelated
+SDK's barrel import can both really mean "replace barrel/CommonJS imports with subpath ESM imports
+so bundlers can tree-shake".
+
+For each cluster below (issue_type, description, aem_rationale, member_count), find GROUPS of
+cluster_ids that describe the same underlying technique -- same root mechanism and fix, not just the
+same broad category. "Reduce JS payload" is too broad a category to group on; "convert CommonJS/
+barrel imports to ESM for tree-shaking" is a specific-enough mechanism that two clusters CAN share.
+Only group clusters a developer would call duplicates if shown both playbooks side by side.
+
+Return strict JSON:
+{"groups": [{"cluster_ids": [<int>, <int>, ...], "reasoning": "<one sentence: the shared mechanism>"}]}
+Only include groups of 2 or more -- omit every cluster that is genuinely distinct from all others."""
+
 
 @dataclass
 class NovelCluster:
@@ -202,6 +233,53 @@ def _label_clusters(
     return out
 
 
+def _deduplicate_clusters(
+    surviving: dict[int, list[tuple[PRRecord, TechniqueExtraction]]],
+    labels_by_id: dict[int, dict],
+    backend: str, model: str | None, timeout: int,
+) -> dict[int, int]:
+    """Returns {duplicate_cluster_id: primary_cluster_id} -- the duplicate
+    should be dropped, not merged into the primary. Merging two clusters
+    that HDBSCAN formed separately risks combining PRs whose diffs differ
+    in exactly the ways that made them embed apart in the first place;
+    dropping the smaller-evidence duplicate in favor of the cluster with
+    more source PRs is the same "reject, don't auto-fix" caution the
+    coherence check already applies to an incoherent cluster.
+
+    Runs as a single call (not batched): cluster counts seen in practice
+    are in the tens, and this payload is short per-cluster labels, not full
+    PR evidence, so it stays small even then."""
+    payload = [
+        {"cluster_id": cid, "issue_type": labels_by_id[cid].get("issue_type", ""),
+         "description": labels_by_id[cid].get("description", ""),
+         "aem_rationale": labels_by_id[cid].get("aem_rationale", ""),
+         "member_count": len(g)}
+        for cid, g in surviving.items() if cid in labels_by_id
+    ]
+    if len(payload) < 2:
+        return {}
+
+    user = json.dumps({"clusters": payload}, ensure_ascii=False)
+    try:
+        result = complete_json(DEDUP_SYSTEM_PROMPT, user, backend=backend, model=model, timeout=timeout)
+    except LLMError as exc:
+        print(f"    dedup check LLM error: {exc} -- skipping dedup, no clusters dropped")
+        return {}
+
+    duplicate_of: dict[int, int] = {}
+    for group in result.get("groups", []):
+        ids = [cid for cid in group.get("cluster_ids", []) if cid in surviving]
+        if len(ids) < 2:
+            continue
+        primary = max(ids, key=lambda cid: len(surviving[cid]))
+        for cid in ids:
+            if cid != primary:
+                duplicate_of[cid] = primary
+        print(f"    dedup: {[labels_by_id[c].get('issue_type') for c in ids]} -> keeping "
+              f"{labels_by_id[primary].get('issue_type')!r} ({group.get('reasoning', '')})")
+    return duplicate_of
+
+
 def _consistency_stats(items: list[tuple[PRRecord, TechniqueExtraction]]) -> tuple[int, int, bool]:
     pos = sum(1 for pr, ext in items if _resolve_direction(pr, ext) == "positive")
     neg = sum(1 for pr, ext in items if _resolve_direction(pr, ext) == "negative")
@@ -263,9 +341,15 @@ def cluster_and_label(
 
     labels_by_id = _label_clusters(surviving, backend, model, timeout)
 
+    duplicate_of = _deduplicate_clusters(surviving, labels_by_id, backend, model, timeout)
+    if duplicate_of:
+        print(f"[cluster] {len(duplicate_of)} cluster(s) identified as duplicates of a sibling, dropping")
+
     result: list[NovelCluster] = []
     dropped_non_cwv = 0
     for cid, g in surviving.items():
+        if cid in duplicate_of:
+            continue
         info = labels_by_id.get(cid, {})
         if info.get("cwv_relevant") is not True:
             dropped_non_cwv += 1

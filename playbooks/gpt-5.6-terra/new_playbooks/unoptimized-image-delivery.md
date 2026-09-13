@@ -27,7 +27,7 @@ Unoptimized images can contribute to higher bandwidth use and slower LCP. Use an
 ## When to apply / when to skip
 **Apply when:**
 - Lighthouse identifies unoptimized images as a contributor to the page’s performance score.
-- The page uses plain `<img>` elements and the framework reports that they could result in slower LCP or higher bandwidth.
+- The page uses plain `<img>` elements and the implementation serves original or oversized image assets that could result in slower LCP or higher bandwidth.
 - Large images are loaded before they are needed.
 
 **Skip when:**
@@ -36,39 +36,29 @@ Unoptimized images can contribute to higher bandwidth use and slower LCP. Use an
 
 ## Recommended approaches
 
-### Use the framework image component or a custom image loader
+### Use the Core Image Component or an AEM image delivery configuration
 
-Where available, use the framework’s optimized image component instead of a plain `<img>` element.
+Where available, use the AEM Core Image Component instead of rendering a plain `<img>` element directly.
 
-```tsx
-import Image from "next/image";
-
-<Image
-  src={imageSource}
-  alt="Product hero"
-  width={1200}
-  height={800}
-/>
+```html
+<sly data-sly-resource="${'product-hero' @
+  resourceType='core/wcm/components/image/v3/image',
+  decorationTagName='div',
+  cssClassName='product-hero'}" />
 ```
 
-The evidence PRs use `next/image` in response to warnings that plain `<img>` elements could result in slower LCP and higher bandwidth. The component can support image resizing and lazy loading; provide dimensions when they are required by the implementation.
+The Core Image Component can use configured DAM renditions and responsive image delivery rather than serving an original asset directly. Configure rendition widths and lazy-loading behavior in the component policy, and provide width and height information when required by the component implementation.
 
 ### Configure approved remote image sources
 
 When optimized images are served from remote hosts, configure the allowed remote source patterns or domains.
 
-```js
-const nextConfig = {
-  images: {
-    remotePatterns: [
-      {
-        protocol: "https",
-        hostname: "assets.example.com",
-        pathname: "/**",
-      },
-    ],
-  },
-};
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<jcr:root xmlns:jcr="http://www.jcp.org/jcr/1.0"
+          jcr:primaryType="nt:unstructured"
+          sling:resourceType="wcm/core/components/policy/policy"
+          allowedRenditionWidths="[400,800,1200]"/>
 ```
 
 ### Let non-critical images load lazily
@@ -80,8 +70,9 @@ For pages with many images, defer images until they are needed rather than loadi
 ### Rendering images with a plain `<img>` element without optimization
 
 ```html
-<!-- Bad: plain image delivery without an optimization component or loader -->
-<img src="/images/product-hero.jpg" alt="Product hero">
+<!-- Bad: HTL renders the original DAM asset directly without the Core Image component. -->
+<img data-sly-attribute.src="${properties.fileReference @ context='uri'}"
+     alt="${properties.alt}">
 ```
 
-**Why this is bad:** Framework warnings in the evidence state that using `<img>` can result in slower LCP and higher bandwidth. Use an optimized image component or custom image loader where appropriate.
+**Why this is bad:** Serving original DAM assets directly can result in slower LCP and higher bandwidth. Use the Core Image Component or a custom AEM image-delivery implementation where appropriate.

@@ -17,7 +17,7 @@ source_prs:
 
 ## What this addresses
 
-Externally hosted font CSS and font files introduce an external dependency for font loading. The evidence shows that locally hosted, subsetted WOFF2 fonts used through Next.js font tooling can avoid external font requests and support font-loading optimization. Next.js font tooling is also described in the evidence as helping prevent CLS.
+Externally hosted font CSS and font files introduce an external dependency for font loading. Locally hosted, subsetted WOFF2 fonts delivered through AEM client libraries avoid external font requests and support predictable font loading. Declaring the required font faces locally can also help prevent layout shifts caused by late font loading.
 
 ## When to apply / when to skip
 **Apply when:**
@@ -35,10 +35,10 @@ Externally hosted font CSS and font files introduce an external dependency for f
 
 ### Self-host only the WOFF2 faces that are used
 
-Use locally hosted, subsetted WOFF2 files and declare the weights and styles used by the application. The evidence shows projects using local subsetted WOFF2 files with `next/font/local` rather than external font providers.
+Use locally hosted, subsetted WOFF2 files and declare the weights and styles used by the application.
 
 ```css
-/* clientlibs/site/fonts/css/fonts.css */
+/* /apps/my-site/clientlibs/site-fonts/css/fonts.css */
 @font-face {
   font-family: "Pretendard";
   src: url("../resources/fonts/Pretendard-Regular.subset.woff2") format("woff2");
@@ -68,11 +68,26 @@ body {
 }
 ```
 
-Use only the required weights and styles. The evidence specifically identifies subsetted WOFF2 files as a way to minimize font-file size.
+Use only the required weights and styles. Subsetted WOFF2 files minimize font-file size.
 
-### Use framework font tooling where available
+### Load local font CSS through an AEM client library
 
-For Next.js applications, use `next/font/local` for local font files or `next/font/google` for supported Google fonts. The evidence shows `next/font` being used to generate font CSS and apply generated font classes or variables to the document layout.
+Create a client library category for the local font CSS and include that category from the page component.
+
+```xml
+<!-- /apps/my-site/clientlibs/site-fonts/.content.xml -->
+<jcr:root
+    xmlns:jcr="http://www.jcp.org/jcr/1.0"
+    xmlns:nt="http://www.jcp.org/jcr/nt/1.0"
+    jcr:primaryType="cq:ClientLibraryFolder"
+    categories="[site.fonts]"
+    allowProxy="{Boolean}true"/>
+```
+
+```text
+# /apps/my-site/clientlibs/site-fonts/css.txt
+css/fonts.css
+```
 
 ```html
 <sly
@@ -87,11 +102,11 @@ For Next.js applications, use `next/font/local` for local font files or `next/fo
 </html>
 ```
 
-The evidence describes Next.js as generating font-related CSS during the build and applying the generated class to the HTML document.
+The client library delivers the locally declared `@font-face` rules with the page rather than requesting font CSS from a third-party provider.
 
 ### Verify the fonts used by the initial layout
 
-Confirm that the locally hosted font files include the weights and styles used by initial page content. The evidence includes projects defining only the font weights used by their typography.
+Confirm that the locally hosted font files include the weights and styles used by initial page content. Define only the font weights used by the site's typography.
 
 ## Anti-patterns
 
@@ -106,7 +121,7 @@ body {
 }
 ```
 
-**Why this is bad:** this retains an external dependency for font loading. The evidence shows projects replacing Google Fonts CSS imports with `next/font/google` or locally hosted fonts.
+**Why this is bad:** this retains an external dependency for font loading. Replace external Google Fonts CSS imports with locally hosted font files declared in an AEM client library.
 
 ### Loading more font weights than the application uses
 
@@ -125,4 +140,4 @@ body {
 }
 ```
 
-**Why this is bad:** the evidence recommends using subsetted WOFF2 files and shows implementations limited to the weights used by the application.
+**Why this is bad:** use subsetted WOFF2 files and limit declarations to the weights used by the application.

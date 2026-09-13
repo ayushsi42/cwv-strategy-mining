@@ -170,8 +170,23 @@ is a React idiom and fails for every non-headless-only flavor, full stop -- it i
 Before writing your output, go through the document top to bottom and individually check EVERY fenced
 code block under `## Recommended approaches` and `## Anti-patterns` (both "Good" and "Bad" examples) --
 do not stop after finding and fixing the first violation, and do not skip a block because it looks
-framework-agnostic at a glance; check its actual contents and fenced language tag. A block inside
-`## Flavor-specific notes` / `### Headless` is exempt; every other block under those two headings is not.
+framework-agnostic at a glance; check its actual contents and fenced language tag. The ONLY exemption
+is a block structurally inside a `## Flavor-specific notes` / `### Headless` subsection -- every other
+block under `## Recommended approaches` / `## Anti-patterns` must comply, with NO exception for prose.
+
+A subsection's own wording does not exempt it. A "### <name>" subsection that opens with, or is titled
+around, "for Next.js applications", "using [framework] tooling", "if your stack uses React", or any
+similar self-qualifying caveat is NOT a valid scope-narrowing exemption -- it is still a non-headless
+main-body example and still fails if its code is React/Vue/Next.js/JSX/a bare npm import. Prose framing
+is not a substitute for the actual `### Headless` structural exemption. When a playbook presents two
+alternative approaches for the same problem -- one genuinely AEM-native, one framework-specific and
+prose-qualified as such -- the framework-specific alternative still fails the check: either translate
+it into a real AEM-native equivalent too, or delete that subsection entirely (the native alternative
+already covers the technique). Do not leave it in place just because a neighboring subsection is clean.
+The ONLY subsection name that ever exempts framework code is exactly `### Headless`. Inventing any
+other `## Flavor-specific notes` subsection name (e.g. `### Next.js`, `### React`, `### Framework
+notes`) does NOT create a new exemption -- if applicable_flavors doesn't include headless, there is no
+legitimate reason for that content to exist in the document at all; delete it.
 
 For each failure, REWRITE only that code example into a real, idiomatic equivalent for the claimed
 flavor(s) -- keep the same underlying technique and behavior, translate the implementation. Do not
@@ -205,6 +220,57 @@ def _looks_like_failed_aem_check(original: str, response: str) -> bool:
     return response[:200].lower().startswith(_AEM_FIDELITY_FAILURE_PHRASES)
 
 
+_REACT_SIGNATURE_RE = re.compile(
+    r"import\s+React\b|from ['\"]react['\"]|from ['\"]react-redux['\"]|"
+    r"next/image|next/font|\buseState\s*\(|\buseEffect\s*\(|\buseSelector\s*\(|"
+    r"\buseMemo\s*\(|\buseCallback\s*\(|React\.\w+|```tsx|```jsx"
+)
+_HEADLESS_HEADING_RE = re.compile(r"^###\s+Headless\b", re.I)
+_ANY_HEADING_RE = re.compile(r"^#{2,3}\s+")
+_FLAVORS_NOTE_LIST_RE = re.compile(r"\[([^\]]*)\]")
+
+
+def _extract_applicable_flavors(text: str, flavors_note: str) -> list[str] | None:
+    """Best-effort flavor list for the deterministic violation scan below --
+    from front matter for new playbooks, from flavors_note's embedded list
+    for enrichment blocks. None (unknown) is treated conservatively by the
+    caller as "not headless-only", so an unresolvable flavor list still
+    gets scanned rather than silently skipped."""
+    fm, _ = _split_front_matter(text)
+    if fm.get("applicable_flavors"):
+        return list(fm["applicable_flavors"])
+    m = _FLAVORS_NOTE_LIST_RE.search(flavors_note)
+    if m:
+        return [f.strip().strip("'\"") for f in m.group(1).split(",") if f.strip()]
+    return None
+
+
+def _find_aem_violations(text: str, applicable_flavors: list[str] | None) -> list[str]:
+    """Deterministic scan for React/Next.js signatures outside a legitimate
+    `### Headless` subsection -- a hard structural check, not trust in the
+    LLM's self-report. Confirmed live (gpt-5.6-terra) that the check can
+    both (a) leave a main-body violation untouched while still editing
+    something else in the document, and (b) invent a non-"Headless"
+    `## Flavor-specific notes` subsection name (e.g. `### Next.js`) as if
+    that were a valid exemption. Only an exact `### Headless` heading, and
+    an all-headless applicable_flavors list, are treated as legitimate."""
+    if applicable_flavors == ["headless"]:
+        return []
+    in_headless = False
+    violations = []
+    for line in text.split("\n"):
+        if _HEADLESS_HEADING_RE.match(line):
+            in_headless = True
+            continue
+        if _ANY_HEADING_RE.match(line):
+            in_headless = False
+        if in_headless:
+            continue
+        if _REACT_SIGNATURE_RE.search(line):
+            violations.append(line.strip()[:120])
+    return violations
+
+
 def _aem_fidelity_check(text: str, backend: str, model: str | None, timeout: int, flavors_note: str = "") -> str:
     """flavors_note is only needed for enrichment blocks, which have no
     front matter of their own to read applicable_flavors from -- new
@@ -215,7 +281,14 @@ def _aem_fidelity_check(text: str, backend: str, model: str | None, timeout: int
     made gpt-5.6-terra echo that instructional line back as if it were part
     of the document (leaked into 14/17 saved enrichment files) -- gpt-5.4-
     mini happened not to, but nothing in the original prompt actually told
-    either model the line wasn't part of the document to preserve."""
+    either model the line wasn't part of the document to preserve.
+
+    Runs a deterministic post-check scan (_find_aem_violations) and retries
+    ONCE with the exact offending lines quoted back if anything remains --
+    confirmed live that a first pass can genuinely miss real violations
+    (not flakiness: identical re-runs reproduced the same miss), so this
+    never just trusts the model's "no changes needed" or a done-looking
+    response at face value."""
     system = _AEM_FIDELITY_SYSTEM
     if flavors_note:
         system += (
@@ -227,7 +300,28 @@ def _aem_fidelity_check(text: str, backend: str, model: str | None, timeout: int
     if _looks_like_failed_aem_check(text, checked):
         print(f"    [aem-fidelity] check returned an unusable response, keeping input unchanged: {checked[:120]!r}")
         return text
-    return _extract_document(checked) if "---" in checked[:50] else checked.strip()
+    result = _extract_document(checked) if "---" in checked[:50] else checked.strip()
+
+    flavors = _extract_applicable_flavors(result, flavors_note)
+    violations = _find_aem_violations(result, flavors)
+    if violations:
+        retry_system = system + (
+            "\n\nYou already reviewed a version of this document and left these exact lines in "
+            "place -- they are still forbidden non-AEM-native code with no legitimate Headless "
+            "exemption:\n" + "\n".join(f"- {v}" for v in violations[:10]) +
+            "\n\nFix every one of them this time: translate to a real AEM-native idiom, or delete "
+            "the subsection entirely if no faithful translation exists. Do not leave any in place."
+        )
+        retried = complete_text(retry_system, result, backend=backend, model=model, timeout=timeout)
+        if not _looks_like_failed_aem_check(result, retried):
+            candidate = _extract_document(retried) if "---" in retried[:50] else retried.strip()
+            remaining = _find_aem_violations(candidate, _extract_applicable_flavors(candidate, flavors_note))
+            if len(remaining) < len(violations):
+                result, violations = candidate, remaining
+        if violations:
+            print(f"    [aem-fidelity] {len(violations)} violation(s) remain after retry, shipping "
+                  f"as-is -- needs manual review: {violations[:3]}")
+    return result
 
 
 # ---------------------------------------------------------------------------
