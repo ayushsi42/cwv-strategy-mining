@@ -206,12 +206,30 @@ def _save_cache(entries: list[tuple[str, TechniqueExtraction]], cache_dir: Path)
             f.write(json.dumps({"cache_key": key, **asdict(e)}) + "\n")
 
 
+def _by_id(items: list, label: str) -> dict:
+    """{item["id"]: item}, skipping any element that isn't a dict with an
+    "id" -- confirmed live that a judge model can return a malformed array
+    element (e.g. a bare string instead of an object) in an otherwise-valid
+    JSON response. That used to raise TypeError/KeyError straight out of
+    call_fn, which _process() didn't catch (only LLMError), crashing the
+    entire extract run at 99.8% done. A malformed element is now dropped
+    with a warning -- its record falls through to the same "no verdict
+    returned" path as a genuinely missing one, never guessed at."""
+    out = {}
+    for item in items:
+        if not isinstance(item, dict) or "id" not in item:
+            print(f"    {label}: skipping malformed response element: {item!r}")
+            continue
+        out[item["id"]] = item
+    return out
+
+
 def _call_relevance_batch(batch: list[PRRecord], backend: str, model: str | None, timeout: int) -> list[RelevanceJudgment]:
     user = "Records:\n" + json.dumps(
         [_compact(r) for r in batch], separators=(",", ":"), ensure_ascii=False
     )
     result = complete_json(RELEVANCE_SYSTEM_PROMPT, user, backend=backend, model=model, timeout=timeout)
-    by_id = {item["id"]: item for item in result.get("judgments", [])}
+    by_id = _by_id(result.get("judgments", []), "relevance")
 
     out = []
     for record in batch:
@@ -233,7 +251,7 @@ def _call_batch(batch: list[PRRecord], backend: str, model: str | None, timeout:
         [_compact(r) for r in batch], separators=(",", ":"), ensure_ascii=False
     )
     result = complete_json(SYSTEM_PROMPT, user, backend=backend, model=model, timeout=timeout)
-    return {item["id"]: item for item in result.get("extractions", [])}
+    return _by_id(result.get("extractions", []), "extraction")
 
 
 def _run_batched(
@@ -264,6 +282,17 @@ def _run_batched(
             return call_fn(batch)
         except LLMError as exc:
             print(f"    {label} batch LLM error: {exc}")
+            return None
+        except Exception as exc:
+            # Defense in depth alongside _by_id's malformed-element filter:
+            # confirmed live that an unhandled TypeError from one bad batch
+            # took down an entire multi-hour, 14,965-record run at 99.8%
+            # done. No single batch's unexpected failure should ever do
+            # that again -- treat it exactly like an LLMError (skip, don't
+            # guess) instead of propagating out of the thread pool.
+            import traceback
+            print(f"    {label} batch unexpected error: {exc!r}")
+            traceback.print_exc()
             return None
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
